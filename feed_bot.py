@@ -1,159 +1,159 @@
 #!/usr/bin/env python3
 """
 RSS → Slack Bot (GitHub Actions 版)
-
-GitHub Actions で動作させる場合:
-1. リポジトリの Settings → Secrets and variables → Actions
-2. New repository secret で SLACK_WEBHOOK_URL を登録
-3. .github/workflows/feed-bot.yml が自動実行される
-
-ローカルでテストする場合:
-export SLACK_WEBHOOK_URL="https://hooks.slack.com/services/..."
-python feed_bot.py
+完全版: 本物のスレッド機能対応
 """
 
 import feedparser
 import requests
 import json
 import os
+import re
 from datetime import datetime, timedelta
 from pathlib import Path
+from collections import defaultdict
 
 # ==================== 設定 ====================
 
-# Slack Webhook URL (環境変数から取得)
-WEBHOOK_URL = os.environ.get("SLACK_WEBHOOK_URL", "")
+BOT_TOKEN = os.environ.get("SLACK_BOT_TOKEN", "")
+CHANNEL_ID = os.environ.get("SLACK_CHANNEL_ID", "")
 
 # 監視する RSS/Atom フィード
 FEEDS = [
-    # Flutter 系 - 公式リリース
-    ("Flutter Releases", "https://github.com/flutter/flutter/releases.atom", "🔵"),
-    ("Dart SDK Releases", "https://github.com/dart-lang/sdk/releases.atom", "🔵"),
-    ("Flutter Blog", "https://medium.com/feed/flutter", "🔵"),
+    # Flutter/Dart 系
+    ("Flutter Releases", "https://github.com/flutter/flutter/releases.atom", "flutter", "🚀"),
+    ("Dart SDK Releases", "https://github.com/dart-lang/sdk/releases.atom", "flutter", "🎯"),
+    ("Flutter Blog", "https://medium.com/feed/flutter", "flutter", "📝"),
     
     # Swift/iOS 系 - 公式
-    ("Swift.org Blog", "https://www.swift.org/atom.xml", "🍎"),
-    ("Apple Developer News", "https://developer.apple.com/news/rss/news.rss", "🍎"),
+    ("Swift.org Blog", "https://www.swift.org/atom.xml", "swift", "⚡️"),
+    ("Apple Developer News", "https://developer.apple.com/news/rss/news.rss", "swift", "🍎"),
     
-    # Swift/iOS 系 - 良質ブログ
-    ("Hacking with Swift", "https://www.hackingwithswift.com/articles/rss", "🍎"),
-    ("SwiftLee", "https://www.avanderlee.com/feed/", "🍎"),
-    ("Swift by Sundell", "https://www.swiftbysundell.com/feed/", "🍎"),
-    ("NSHipster", "https://nshipster.com/feed.xml", "🍎"),
-    ("Donny Wals", "https://www.donnywals.com/feed/", "🍎"),
+    # Swift/iOS 系 - コミュニティ
+    ("Hacking with Swift", "https://www.hackingwithswift.com/articles/rss", "swift", "💻"),
+    ("SwiftLee", "https://www.avanderlee.com/feed/", "swift", "🎨"),
+    ("Swift by Sundell", "https://www.swiftbysundell.com/feed/", "swift", "💡"),
+    ("NSHipster", "https://nshipster.com/feed.xml", "swift", "🔍"),
+    ("Donny Wals", "https://www.donnywals.com/feed/", "swift", "📚"),
     
     # 週次キュレーション
-    ("iOS Dev Weekly", "https://iosdevweekly.com/issues.rss", "📰"),
+    ("iOS Dev Weekly", "https://iosdevweekly.com/issues.rss", "weekly", "📰"),
 ]
 
-# 既読管理ファイル（Git で管理される）
 SEEN_FILE = Path("seen_entries.json")
-
-# 初回実行時に過去何時間分まで遡るか
 INITIAL_HOURS = 48
+
+# カテゴリ情報
+CATEGORIES = {
+    "flutter": {
+        "name": "Flutter & Dart Updates",
+        "emoji": "📦",
+    },
+    "swift": {
+        "name": "Swift & iOS News",
+        "emoji": "🍎",
+    },
+    "weekly": {
+        "name": "Weekly Digest",
+        "emoji": "📰",
+    }
+}
 
 # ==================== コア処理 ====================
 
 def load_seen_entries():
-    """既読エントリを読み込む"""
     if SEEN_FILE.exists():
         try:
             with open(SEEN_FILE, 'r', encoding='utf-8') as f:
                 return json.load(f)
         except json.JSONDecodeError:
-            print("⚠️  既読ファイルが破損しています。新規作成します。")
             return {}
     return {}
 
 def save_seen_entries(seen):
-    """既読エントリを保存"""
     with open(SEEN_FILE, 'w', encoding='utf-8') as f:
         json.dump(seen, f, ensure_ascii=False, indent=2)
 
 def parse_entry_date(entry):
-    """エントリの日付をパース"""
     if hasattr(entry, 'published_parsed') and entry.published_parsed:
         return datetime(*entry.published_parsed[:6])
     elif hasattr(entry, 'updated_parsed') and entry.updated_parsed:
         return datetime(*entry.updated_parsed[:6])
     return datetime.now()
 
-def format_slack_message(feed_name, entry, emoji):
-    """Slack メッセージを整形"""
-    title = entry.title if hasattr(entry, 'title') else "タイトルなし"
-    link = entry.link if hasattr(entry, 'link') else ""
+def make_title_exciting(title):
+    """タイトルをワクワクする表現に変換"""
+    # リリース系
+    if any(word in title.lower() for word in ['release', 'released', 'available', 'launches']):
+        version = re.search(r'\d+\.\d+(?:\.\d+)?', title)
+        if version:
+            return f"v{version.group()} がリリース！🎉"
+        return f"{title} 🎉"
     
-    # 説明文（あれば先頭150文字）
-    summary = ""
-    if hasattr(entry, 'summary'):
-        # HTML タグを簡易除去
-        import re
-        clean_summary = re.sub('<[^<]+?>', '', entry.summary)
-        summary = clean_summary[:150].replace('\n', ' ').strip()
-        if len(clean_summary) > 150:
-            summary += "..."
+    # ベータ・プレビュー系
+    if any(word in title.lower() for word in ['beta', 'preview', 'rc', 'alpha']):
+        return f"{title} ⚡️"
     
-    # 日付
-    entry_date = parse_entry_date(entry)
-    date_str = entry_date.strftime("%Y-%m-%d")
+    # アップデート・新機能系
+    if any(word in title.lower() for word in ['update', 'new', 'introducing', 'announce']):
+        return f"{title} ✨"
     
-    # Slack Block Kit 形式
-    blocks = [
-        {
-            "type": "section",
-            "text": {
-                "type": "mrkdwn",
-                "text": f"{emoji} *{feed_name}*\n<{link}|{title}>"
-            }
-        }
-    ]
+    # 修正系
+    if any(word in title.lower() for word in ['fix', 'hotfix', 'patch']):
+        return f"{title} 🔧"
     
-    if summary:
-        blocks.append({
-            "type": "context",
-            "elements": [
-                {
-                    "type": "mrkdwn",
-                    "text": f"{date_str} • {summary}"
-                }
-            ]
-        })
-    else:
-        blocks.append({
-            "type": "context",
-            "elements": [
-                {
-                    "type": "mrkdwn",
-                    "text": date_str
-                }
-            ]
-        })
-    
-    return {"blocks": blocks}
+    # そのまま返す
+    return title
 
-def send_to_slack(message):
-    """Slack に投稿"""
-    if not WEBHOOK_URL:
-        print("⚠️  SLACK_WEBHOOK_URL が設定されていません")
-        return False
+def post_to_slack(text=None, blocks=None, thread_ts=None):
+    """Slack に投稿（Bot Token 使用）"""
+    if not BOT_TOKEN:
+        print("❌ エラー: SLACK_BOT_TOKEN が設定されていません")
+        return None
+    
+    if not CHANNEL_ID:
+        print("❌ エラー: SLACK_CHANNEL_ID が設定されていません")
+        return None
+    
+    payload = {
+        "channel": CHANNEL_ID,
+        "unfurl_links": False,
+        "unfurl_media": False,
+    }
+    
+    if text:
+        payload["text"] = text
+    if blocks:
+        payload["blocks"] = blocks
+    if thread_ts:
+        payload["thread_ts"] = thread_ts
     
     try:
         response = requests.post(
-            WEBHOOK_URL,
-            json=message,
-            headers={'Content-Type': 'application/json'},
+            "https://slack.com/api/chat.postMessage",
+            json=payload,
+            headers={
+                "Authorization": f"Bearer {BOT_TOKEN}",
+                "Content-Type": "application/json"
+            },
             timeout=10
         )
-        if response.status_code != 200:
-            print(f"⚠️  Slack 投稿エラー: {response.status_code}")
-            return False
-        return True
+        
+        data = response.json()
+        
+        if not data.get("ok"):
+            print(f"⚠️  Slack 投稿エラー: {data.get('error', 'unknown')}")
+            return None
+        
+        # スレッドのタイムスタンプを返す
+        return data.get("ts")
+        
     except Exception as e:
         print(f"⚠️  Slack 投稿失敗: {e}")
-        return False
+        return None
 
-def check_feed(feed_name, feed_url, emoji, seen_entries, is_first_run):
-    """1つのフィードをチェック"""
+def check_feed(feed_name, feed_url, category, emoji, seen_entries, is_first_run):
+    """1つのフィードをチェックして新着を返す"""
     print(f"📡 チェック中: {feed_name}")
     
     try:
@@ -161,99 +161,143 @@ def check_feed(feed_name, feed_url, emoji, seen_entries, is_first_run):
         
         if feed.bozo:
             print(f"  ⚠️  フィード解析エラー")
-            return 0
+            return []
         
-        new_count = 0
+        new_entries = []
         cutoff_time = datetime.now() - timedelta(hours=INITIAL_HOURS) if is_first_run else None
         
-        # 新しいエントリから順に処理（最大10件まで）
         for entry in feed.entries[:10]:
-            # ユニークIDを生成
             entry_id = entry.link if hasattr(entry, 'link') else entry.title
             
-            # 既読チェック
             if entry_id in seen_entries:
                 continue
             
-            # 初回実行時は古い記事をスキップ
             if is_first_run and cutoff_time:
                 entry_date = parse_entry_date(entry)
                 if entry_date < cutoff_time:
                     seen_entries[entry_id] = True
                     continue
             
-            # Slack に投稿
-            message = format_slack_message(feed_name, entry, emoji)
-            if send_to_slack(message):
-                seen_entries[entry_id] = True
-                new_count += 1
-                print(f"  ✅ {entry.title[:50]}...")
-            else:
-                print(f"  ❌ 投稿失敗: {entry.title[:50]}...")
+            new_entries.append({
+                "feed_name": feed_name,
+                "entry": entry,
+                "emoji": emoji,
+                "category": category,
+                "entry_id": entry_id
+            })
         
-        return new_count
+        if new_entries:
+            print(f"  ✅ {len(new_entries)} 件の新着")
+        
+        return new_entries
         
     except Exception as e:
         print(f"  ⚠️  エラー: {e}")
-        return 0
+        return []
 
-def send_daily_summary(total_new):
-    """日次サマリーを投稿"""
-    now = datetime.now()
+def post_category_with_thread(category_key, entries):
+    """カテゴリの親メッセージを投稿し、詳細をスレッドに"""
+    if not entries:
+        return
     
-    message = {
-        "blocks": [
-            {
-                "type": "header",
-                "text": {
-                    "type": "plain_text",
-                    "text": f"📊 本日のフィードまとめ ({now.strftime('%Y-%m-%d')})"
-                }
-            },
-            {
-                "type": "section",
-                "text": {
-                    "type": "mrkdwn",
-                    "text": f"• 新着記事: *{total_new}* 件\n• 監視フィード: *{len(FEEDS)}* 個"
-                }
+    cat_info = CATEGORIES[category_key]
+    count = len(entries)
+    
+    # 親メッセージ（カテゴリサマリー）
+    parent_blocks = [
+        {
+            "type": "header",
+            "text": {
+                "type": "plain_text",
+                "text": f"{cat_info['emoji']} {cat_info['name']}",
+                "emoji": True
             }
-        ]
-    }
+        },
+        {
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": f"*{count} 件*の新着情報をキャッチ！\n💬 スレッドで詳細をチェック"
+            }
+        }
+    ]
     
-    send_to_slack(message)
+    print(f"\n📤 投稿中: {cat_info['name']} ({count}件)")
+    
+    # 親メッセージを投稿
+    thread_ts = post_to_slack(
+        text=f"{cat_info['name']} ({count}件の新着)",
+        blocks=parent_blocks
+    )
+    
+    if not thread_ts:
+        print(f"  ❌ 親メッセージの投稿失敗")
+        return
+    
+    print(f"  ✅ 親メッセージ投稿完了 (ts: {thread_ts})")
+    
+    # スレッドに各エントリを投稿
+    for idx, item in enumerate(entries, 1):
+        entry = item["entry"]
+        title = entry.title if hasattr(entry, 'title') else "タイトルなし"
+        link = entry.link if hasattr(entry, 'link') else ""
+        
+        # ワクワクするタイトル
+        exciting_title = make_title_exciting(title)
+        
+        # スレッドに投稿
+        thread_result = post_to_slack(
+            text=f"{item['emoji']} {exciting_title}\n{link}",
+            thread_ts=thread_ts
+        )
+        
+        if thread_result:
+            print(f"  └─ ✅ [{idx}/{count}] {title[:40]}...")
+        else:
+            print(f"  └─ ❌ [{idx}/{count}] 投稿失敗")
+    
+    print(f"  🎉 カテゴリ完了")
 
 def main():
-    """メイン処理"""
     print(f"\n{'='*60}")
-    print(f"🤖 RSS Feed Bot 起動 (GitHub Actions)")
+    print(f"🤖 RSS Feed Bot 起動（スレッド対応版）")
     print(f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} UTC")
     print(f"{'='*60}\n")
     
-    # Webhook URL チェック
-    if not WEBHOOK_URL:
-        print("❌ エラー: SLACK_WEBHOOK_URL 環境変数が設定されていません")
-        print("   GitHub の Settings → Secrets で設定してください")
+    if not BOT_TOKEN:
+        print("❌ エラー: SLACK_BOT_TOKEN 環境変数が設定されていません")
         return
     
-    # 既読情報を読み込み
+    if not CHANNEL_ID:
+        print("❌ エラー: SLACK_CHANNEL_ID 環境変数が設定されていません")
+        return
+    
     seen_entries = load_seen_entries()
     is_first_run = len(seen_entries) == 0
     
     if is_first_run:
         print(f"🎉 初回実行: 過去 {INITIAL_HOURS} 時間分のみ通知します\n")
     
-    # 各フィードをチェック
+    # カテゴリごとに新着を収集
+    category_entries = defaultdict(list)
+    
+    for feed_name, feed_url, category, emoji in FEEDS:
+        new_items = check_feed(feed_name, feed_url, category, emoji, seen_entries, is_first_run)
+        
+        for item in new_items:
+            category_entries[category].append(item)
+            seen_entries[item["entry_id"]] = True
+    
+    # カテゴリごとに投稿（スレッド形式）
     total_new = 0
-    for feed_name, feed_url, emoji in FEEDS:
-        new_count = check_feed(feed_name, feed_url, emoji, seen_entries, is_first_run)
-        total_new += new_count
+    for category_key in ["flutter", "swift", "weekly"]:
+        entries = category_entries[category_key]
+        if entries:
+            post_category_with_thread(category_key, entries)
+            total_new += len(entries)
     
     # 既読情報を保存
     save_seen_entries(seen_entries)
-    
-    # 日次サマリーを投稿（新着がある場合のみ）
-    if total_new > 0:
-        send_daily_summary(total_new)
     
     print(f"\n{'='*60}")
     print(f"✨ 完了: {total_new} 件の新着記事を投稿しました")
