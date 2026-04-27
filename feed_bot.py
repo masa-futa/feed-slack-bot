@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 RSS → Slack Bot (GitHub Actions 版)
-完全版: 本物のスレッド機能対応
+完全版: 全カテゴリ対応 + 2チャンネル対応
 """
 
 import feedparser
@@ -16,47 +16,78 @@ from collections import defaultdict
 # ==================== 設定 ====================
 
 BOT_TOKEN = os.environ.get("SLACK_BOT_TOKEN", "")
-CHANNEL_ID = os.environ.get("SLACK_CHANNEL_ID", "")
+
+# チャンネルID（環境変数から取得、デフォルトは mobile-dev）
+CHANNEL_MOBILE = os.environ.get("SLACK_CHANNEL_MOBILE", "")  # モバイル開発用
+CHANNEL_DIGEST = os.environ.get("SLACK_CHANNEL_DIGEST", "")  # デザイン・AI・ツール用
 
 # 監視する RSS/Atom フィード
 FEEDS = [
+    # ============================================
+    # 📱 モバイル開発系（#mobile-dev に投稿）
+    # ============================================
+    
     # Flutter/Dart 系
-    ("Flutter Releases", "https://github.com/flutter/flutter/releases.atom", "flutter", "🚀"),
-    ("Dart SDK Releases", "https://github.com/dart-lang/sdk/releases.atom", "flutter", "🎯"),
-    ("Flutter Blog", "https://medium.com/feed/flutter", "flutter", "📝"),
+    ("Flutter Releases", "https://github.com/flutter/flutter/releases.atom", "flutter", "🚀", "mobile"),
+    ("Dart SDK Releases", "https://github.com/dart-lang/sdk/releases.atom", "flutter", "🎯", "mobile"),
+    ("Flutter Blog", "https://medium.com/feed/flutter", "flutter", "📝", "mobile"),
     
-    # Swift/iOS 系 - 公式
-    ("Swift.org Blog", "https://www.swift.org/atom.xml", "swift", "⚡️"),
-    ("Apple Developer News", "https://developer.apple.com/news/rss/news.rss", "swift", "🍎"),
+    # Swift/iOS 系
+    ("Swift.org Blog", "https://www.swift.org/atom.xml", "swift", "⚡️", "mobile"),
+    ("Apple Developer News", "https://developer.apple.com/news/rss/news.rss", "swift", "🍎", "mobile"),
+    ("Hacking with Swift", "https://www.hackingwithswift.com/articles/rss", "swift", "💻", "mobile"),
+    ("SwiftLee", "https://www.avanderlee.com/feed/", "swift", "🎨", "mobile"),
+    ("Swift by Sundell", "https://www.swiftbysundell.com/feed/", "swift", "💡", "mobile"),
+    ("NSHipster", "https://nshipster.com/feed.xml", "swift", "🔍", "mobile"),
+    ("Donny Wals", "https://www.donnywals.com/feed/", "swift", "📚", "mobile"),
+    ("iOS Dev Weekly", "https://iosdevweekly.com/issues.rss", "swift", "📰", "mobile"),
     
-    # Swift/iOS 系 - コミュニティ
-    ("Hacking with Swift", "https://www.hackingwithswift.com/articles/rss", "swift", "💻"),
-    ("SwiftLee", "https://www.avanderlee.com/feed/", "swift", "🎨"),
-    ("Swift by Sundell", "https://www.swiftbysundell.com/feed/", "swift", "💡"),
-    ("NSHipster", "https://nshipster.com/feed.xml", "swift", "🔍"),
-    ("Donny Wals", "https://www.donnywals.com/feed/", "swift", "📚"),
+    # Android/Kotlin 系
+    ("Android Developers Blog", "https://android-developers.googleblog.com/feeds/posts/default", "android", "🤖", "mobile"),
+    ("Kotlin Blog", "https://blog.jetbrains.com/kotlin/feed/", "android", "💡", "mobile"),
+    ("Android Weekly", "https://androidweekly.net/rss", "android", "📰", "mobile"),
+    ("Joe Birch", "https://joebirch.co/feed/", "android", "🎯", "mobile"),
+    ("Styling Android", "https://blog.stylingandroid.com/feed/", "android", "🎨", "mobile"),
     
-    # 週次キュレーション
-    ("iOS Dev Weekly", "https://iosdevweekly.com/issues.rss", "weekly", "📰"),
+    # ============================================
+    # 🎨 デザイン・AI・ツール系（#dev-digest に投稿）
+    # ============================================
+    
+    # Design & UX
+    ("Nielsen Norman Group", "https://www.nngroup.com/feed/rss/", "design", "🧪", "digest"),
+    ("Smashing Magazine", "https://www.smashingmagazine.com/feed/", "design", "🎨", "digest"),
+    ("A List Apart", "https://alistapart.com/main/feed/", "design", "📐", "digest"),
+    ("UX Collective", "https://uxdesign.cc/feed", "design", "💡", "digest"),
+    ("Figma Blog", "https://www.figma.com/blog/rss/", "design", "🔷", "digest"),
+    ("Laws of UX", "https://lawsofux.com/rss.xml", "design", "⚖️", "digest"),
+    
+    # AI & ML
+    ("OpenAI Blog", "https://openai.com/blog/rss/", "ai", "🧠", "digest"),
+    ("Anthropic News", "https://www.anthropic.com/news/rss", "ai", "🤖", "digest"),
+    ("Google AI Blog", "https://blog.research.google/feeds/posts/default", "ai", "🔬", "digest"),
+    ("Hugging Face Blog", "https://huggingface.co/blog/feed.xml", "ai", "🤗", "digest"),
+    ("Simon Willison", "https://simonwillison.net/atom/everything/", "ai", "📝", "digest"),
+    
+    # Dev Tools & Services
+    ("GitHub Blog", "https://github.blog/feed/", "tools", "⚙️", "digest"),
+    ("GitLab Blog", "https://about.gitlab.com/atom.xml", "tools", "🦊", "digest"),
+    ("Notion Blog", "https://www.notion.so/blog/rss", "tools", "📓", "digest"),
+    ("Linear Blog", "https://linear.app/blog/rss.xml", "tools", "📊", "digest"),
+    ("Vercel Blog", "https://vercel.com/blog/rss.xml", "tools", "▲", "digest"),
+    ("Railway Blog", "https://blog.railway.app/rss.xml", "tools", "🚂", "digest"),
 ]
 
 SEEN_FILE = Path("seen_entries.json")
 INITIAL_HOURS = 48
 
-# カテゴリ情報
+# カテゴリ情報（表示用）
 CATEGORIES = {
-    "flutter": {
-        "name": "Flutter & Dart Updates",
-        "emoji": "📦",
-    },
-    "swift": {
-        "name": "Swift & iOS News",
-        "emoji": "🍎",
-    },
-    "weekly": {
-        "name": "Weekly Digest",
-        "emoji": "📰",
-    }
+    "flutter": {"name": "Flutter & Dart", "emoji": "📦"},
+    "swift": {"name": "Swift & iOS", "emoji": "🍎"},
+    "android": {"name": "Android & Kotlin", "emoji": "🤖"},
+    "design": {"name": "Design & UX", "emoji": "🎨"},
+    "ai": {"name": "AI & ML", "emoji": "🧠"},
+    "tools": {"name": "Dev Tools", "emoji": "⚙️"},
 }
 
 # ==================== コア処理 ====================
@@ -83,40 +114,35 @@ def parse_entry_date(entry):
 
 def make_title_exciting(title):
     """タイトルをワクワクする表現に変換"""
-    # リリース系
     if any(word in title.lower() for word in ['release', 'released', 'available', 'launches']):
         version = re.search(r'\d+\.\d+(?:\.\d+)?', title)
         if version:
             return f"v{version.group()} がリリース！🎉"
         return f"{title} 🎉"
     
-    # ベータ・プレビュー系
     if any(word in title.lower() for word in ['beta', 'preview', 'rc', 'alpha']):
         return f"{title} ⚡️"
     
-    # アップデート・新機能系
     if any(word in title.lower() for word in ['update', 'new', 'introducing', 'announce']):
         return f"{title} ✨"
     
-    # 修正系
     if any(word in title.lower() for word in ['fix', 'hotfix', 'patch']):
         return f"{title} 🔧"
     
-    # そのまま返す
     return title
 
-def post_to_slack(text=None, blocks=None, thread_ts=None):
+def post_to_slack(channel_id, text=None, blocks=None, thread_ts=None):
     """Slack に投稿（Bot Token 使用）"""
     if not BOT_TOKEN:
         print("❌ エラー: SLACK_BOT_TOKEN が設定されていません")
         return None
     
-    if not CHANNEL_ID:
-        print("❌ エラー: SLACK_CHANNEL_ID が設定されていません")
+    if not channel_id:
+        print("❌ エラー: チャンネルIDが設定されていません")
         return None
     
     payload = {
-        "channel": CHANNEL_ID,
+        "channel": channel_id,
         "unfurl_links": False,
         "unfurl_media": False,
     }
@@ -145,14 +171,13 @@ def post_to_slack(text=None, blocks=None, thread_ts=None):
             print(f"⚠️  Slack 投稿エラー: {data.get('error', 'unknown')}")
             return None
         
-        # スレッドのタイムスタンプを返す
         return data.get("ts")
         
     except Exception as e:
         print(f"⚠️  Slack 投稿失敗: {e}")
         return None
 
-def check_feed(feed_name, feed_url, category, emoji, seen_entries, is_first_run):
+def check_feed(feed_name, feed_url, category, emoji, channel, seen_entries, is_first_run):
     """1つのフィードをチェックして新着を返す"""
     print(f"📡 チェック中: {feed_name}")
     
@@ -183,6 +208,7 @@ def check_feed(feed_name, feed_url, category, emoji, seen_entries, is_first_run)
                 "entry": entry,
                 "emoji": emoji,
                 "category": category,
+                "channel": channel,
                 "entry_id": entry_id
             })
         
@@ -195,7 +221,7 @@ def check_feed(feed_name, feed_url, category, emoji, seen_entries, is_first_run)
         print(f"  ⚠️  エラー: {e}")
         return []
 
-def post_category_with_thread(category_key, entries):
+def post_category_with_thread(category_key, entries, channel_id):
     """カテゴリの親メッセージを投稿し、詳細をスレッドに"""
     if not entries:
         return
@@ -203,7 +229,6 @@ def post_category_with_thread(category_key, entries):
     cat_info = CATEGORIES[category_key]
     count = len(entries)
     
-    # 親メッセージ（カテゴリサマリー）
     parent_blocks = [
         {
             "type": "header",
@@ -224,8 +249,8 @@ def post_category_with_thread(category_key, entries):
     
     print(f"\n📤 投稿中: {cat_info['name']} ({count}件)")
     
-    # 親メッセージを投稿
     thread_ts = post_to_slack(
+        channel_id,
         text=f"{cat_info['name']} ({count}件の新着)",
         blocks=parent_blocks
     )
@@ -236,17 +261,15 @@ def post_category_with_thread(category_key, entries):
     
     print(f"  ✅ 親メッセージ投稿完了 (ts: {thread_ts})")
     
-    # スレッドに各エントリを投稿
     for idx, item in enumerate(entries, 1):
         entry = item["entry"]
         title = entry.title if hasattr(entry, 'title') else "タイトルなし"
         link = entry.link if hasattr(entry, 'link') else ""
         
-        # ワクワクするタイトル
         exciting_title = make_title_exciting(title)
         
-        # スレッドに投稿
         thread_result = post_to_slack(
+            channel_id,
             text=f"{item['emoji']} {exciting_title}\n{link}",
             thread_ts=thread_ts
         )
@@ -260,16 +283,12 @@ def post_category_with_thread(category_key, entries):
 
 def main():
     print(f"\n{'='*60}")
-    print(f"🤖 RSS Feed Bot 起動（スレッド対応版）")
+    print(f"🤖 RSS Feed Bot 起動（全カテゴリ版）")
     print(f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} UTC")
     print(f"{'='*60}\n")
     
     if not BOT_TOKEN:
         print("❌ エラー: SLACK_BOT_TOKEN 環境変数が設定されていません")
-        return
-    
-    if not CHANNEL_ID:
-        print("❌ エラー: SLACK_CHANNEL_ID 環境変数が設定されていません")
         return
     
     seen_entries = load_seen_entries()
@@ -278,26 +297,45 @@ def main():
     if is_first_run:
         print(f"🎉 初回実行: 過去 {INITIAL_HOURS} 時間分のみ通知します\n")
     
-    # カテゴリごとに新着を収集
-    category_entries = defaultdict(list)
+    # カテゴリごと・チャンネルごとに新着を収集
+    mobile_entries = defaultdict(list)  # mobile チャンネル用
+    digest_entries = defaultdict(list)  # digest チャンネル用
     
-    for feed_name, feed_url, category, emoji in FEEDS:
-        new_items = check_feed(feed_name, feed_url, category, emoji, seen_entries, is_first_run)
+    for feed_name, feed_url, category, emoji, channel in FEEDS:
+        new_items = check_feed(feed_name, feed_url, category, emoji, channel, seen_entries, is_first_run)
         
         for item in new_items:
-            category_entries[category].append(item)
+            if channel == "mobile":
+                mobile_entries[category].append(item)
+            else:
+                digest_entries[category].append(item)
             seen_entries[item["entry_id"]] = True
     
-    # カテゴリごとに投稿（スレッド形式）
-    total_new = 0
-    for category_key in ["flutter", "swift", "weekly"]:
-        entries = category_entries[category_key]
-        if entries:
-            post_category_with_thread(category_key, entries)
-            total_new += len(entries)
+    # モバイル開発チャンネルに投稿
+    if CHANNEL_MOBILE:
+        print(f"\n{'='*60}")
+        print(f"📱 モバイル開発チャンネルに投稿")
+        print(f"{'='*60}")
+        for category_key in ["flutter", "swift", "android"]:
+            entries = mobile_entries[category_key]
+            if entries:
+                post_category_with_thread(category_key, entries, CHANNEL_MOBILE)
+    
+    # デザイン・AI・ツールチャンネルに投稿
+    if CHANNEL_DIGEST:
+        print(f"\n{'='*60}")
+        print(f"🎨 開発周辺チャンネルに投稿")
+        print(f"{'='*60}")
+        for category_key in ["design", "ai", "tools"]:
+            entries = digest_entries[category_key]
+            if entries:
+                post_category_with_thread(category_key, entries, CHANNEL_DIGEST)
     
     # 既読情報を保存
     save_seen_entries(seen_entries)
+    
+    total_new = sum(len(entries) for entries in mobile_entries.values()) + \
+                sum(len(entries) for entries in digest_entries.values())
     
     print(f"\n{'='*60}")
     print(f"✨ 完了: {total_new} 件の新着記事を投稿しました")
