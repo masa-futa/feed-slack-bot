@@ -382,5 +382,22 @@
   "https://blog.jetbrains.com/pycharm/2026/04/pycharm-for-django-fundraiser-why-django-matters-in-the-ai-era-and-why-we-re-supporting-it/": true,
   "https://blog.jetbrains.com/scala/2026/04/21/incremental-highlighting/": true,
   "https://blog.jetbrains.com/team/2026/04/27/jetbrains-annual-highlights-2026-are-here/": true,
-  "https://blog.jetbrains.com/qodana/2026/04/reduce-software-bugs-and-money-spent/": true
+  "https://blog.jetbrains.com/qodana/2026/04/reduce-software-bugs-and-money-spent/": true,
+  "https://github.com/flutter/flutter/releases/tag/3.41.8": true,
+  "https://github.com/dart-lang/sdk/releases/tag/3.13.0-71.0.dev": true,
+  "https://blog.flutter.dev/thats-a-wrap-everything-flutter-at-google-cloud-next-1f4d3c6c6a6e?source=rss----4da7dfd21a33---4": true,
+  "https://developer.apple.com/news/?id=agq42lxe": true,
+  "https://joebirch.co/android/building-a-responsive-tab-row-in-jetpack-compose/": true,
+  "https://joebirch.co/android/exploring-jetpack-compose-buttongroup/": true,
+  "https://joebirch.co/android/8-steps-to-success-with-gemini-in-android-studio/": true,
+  "https://joebirch.co/android/exploring-material-3-for-compose-floating-action-button-menu/": true,
+  "https://joebirch.co/android/exploring-navigation-3-for-android/": true,
+  "https://joebirch.co/android/exploring-material-3-for-compose-large-top-app-bar/": true,
+  "https://joebirch.co/android/material-3-expressive-for-compose-loading-indicator/": true,
+  "https://joebirch.co/android/exploring-jetpack-compose-for-widgets-with-glance/": true,
+  "https://joebirch.co/android/exploring-jetpack-compose-dockedsearchbar/": true,
+  "https://joebirch.co/android/exploring-the-searchbar-composable/": true,
+  "https://simonwillison.net/2026/Apr/27/now-deceased-agi-clause/#atom-everything": true,
+  "https://simonwillison.net/2026/Apr/27/speech-translation-in-google-meet-is-now-rolling-out-to-mobile-d/#atom-everything": true,
+  "https://about.gitlab.com/blog/give-your-ai-agent-direct-structured-gitlab-access-with-glab-cli/": true
 }
