@@ -5,7 +5,7 @@ on:
   schedule:
     - cron: '0 23 * * *'  # UTC 23:00 = JST 8:00
   
-  # 手動実行も可能にする（テスト用）
+  # 手動実行も可能
   workflow_dispatch:
 
 jobs:
@@ -25,11 +25,13 @@ jobs:
       run: |
         pip install feedparser requests
     
-    - name: Run feed bot
+    - name: Run feed bot (80 feeds, 4 channels)
       env:
         SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
         SLACK_CHANNEL_MOBILE: ${{ secrets.SLACK_CHANNEL_MOBILE }}
-        SLACK_CHANNEL_DIGEST: ${{ secrets.SLACK_CHANNEL_DIGEST }}
+        SLACK_CHANNEL_DESIGN: ${{ secrets.SLACK_CHANNEL_DESIGN }}
+        SLACK_CHANNEL_AI: ${{ secrets.SLACK_CHANNEL_AI }}
+        SLACK_CHANNEL_TOOLS: ${{ secrets.SLACK_CHANNEL_TOOLS }}
       run: |
         python feed_bot.py
     
