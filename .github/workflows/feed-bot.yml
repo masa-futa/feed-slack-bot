@@ -30,8 +30,11 @@ jobs:
         SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
         SLACK_CHANNEL_MOBILE: ${{ secrets.SLACK_CHANNEL_MOBILE }}
         SLACK_CHANNEL_DESIGN: ${{ secrets.SLACK_CHANNEL_DESIGN }}
+        SLACK_CHANNEL_DESIGN_PRODUCT: ${{ secrets.SLACK_CHANNEL_DESIGN_PRODUCT }}
         SLACK_CHANNEL_AI: ${{ secrets.SLACK_CHANNEL_AI }}
         SLACK_CHANNEL_TOOLS: ${{ secrets.SLACK_CHANNEL_TOOLS }}
+        SLACK_CHANNEL_MOBILE_RELEASES: ${{ secrets.SLACK_CHANNEL_MOBILE_RELEASES }}
+        SLACK_CHANNEL_AI_RELEASES: ${{ secrets.SLACK_CHANNEL_AI_RELEASES }}
       run: |
         python feed_bot.py
     
