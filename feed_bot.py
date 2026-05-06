@@ -1,9 +1,13 @@
 #!/usr/bin/env python3
 """
-RSS → Slack Bot (GitHub Actions 版)
-7チャンネル構成 + リッチフォーマット:
-  - release_* カテゴリ → リリースカード（アクセント + 要約 + 相対日時）
-  - それ以外           → コンパクトリスト（タイトル + 要約 + ソース + 相対日時）
+RSS → Slack Bot (GitHub Actions 版) — 再設計版
+
+主な変更:
+  1. AI カテゴリ細分化: official / practice / devtools / research
+  2. Claude Code / Codex / Prompt Engineering 系の活用術ソース追加
+  3. Zenn は API 経由 + LGTM 閾値で人気記事のみ取得
+  4. Medium タグフィード + キーワードフィルタで「活用術」を厳選
+  5. カテゴリ別投稿上限でノイズ抑制
 """
 
 import feedparser
@@ -11,559 +15,256 @@ import requests
 import json
 import os
 import re
-import html as html_lib
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from collections import defaultdict
 
 # ==================== 設定 ====================
+
 BOT_TOKEN = os.environ.get("SLACK_BOT_TOKEN", "")
 
-CHANNEL_MOBILE          = os.environ.get("SLACK_CHANNEL_MOBILE", "")
-CHANNEL_MOBILE_RELEASES = os.environ.get("SLACK_CHANNEL_MOBILE_RELEASES", "")
-CHANNEL_DESIGN          = os.environ.get("SLACK_CHANNEL_DESIGN", "")
-CHANNEL_DESIGN_PRODUCT  = os.environ.get("SLACK_CHANNEL_DESIGN_PRODUCT", "")
-CHANNEL_AI              = os.environ.get("SLACK_CHANNEL_AI", "")
-CHANNEL_AI_RELEASES     = os.environ.get("SLACK_CHANNEL_AI_RELEASES", "")
-CHANNEL_TOOLS           = os.environ.get("SLACK_CHANNEL_TOOLS", "")
-# CHANNEL_RESEARCH = os.environ.get("SLACK_CHANNEL_RESEARCH", "")
+# チャンネルID(環境変数から取得)
+CHANNEL_MOBILE = os.environ.get("SLACK_CHANNEL_MOBILE", "")
+CHANNEL_DESIGN = os.environ.get("SLACK_CHANNEL_DESIGN", "")
+CHANNEL_AI = os.environ.get("SLACK_CHANNEL_AI", "")
+CHANNEL_TOOLS = os.environ.get("SLACK_CHANNEL_TOOLS", "")
 
-SUMMARY_MAX_CHARS = 100   # 要約の最大文字数
-
-# ==================== タイトルフィルタ ====================
-
-AI_CODING_TITLE_BLACKLIST = [
-    "deprecat", "retired", "removal", "removed from", "end of life", "eol", "sunset",
-    "廃止", "削除",
-    "outage", "incident", "degraded", "post-mortem", "postmortem", "障害",
-    "pricing", "price increase", "billing change", "値上げ", "料金改定",
-    "benchmark", "leaderboard", "model card", "research preview", "paper:", "arxiv",
-    "case study", "partner", "transformation partners", "customer story", "事例紹介",
-]
-
-DESIGN_PRODUCT_TITLE_BLACKLIST = [
-    "we're hiring", "we are hiring", "now hiring", "join our team", "career", "採用",
-    "award", "awards", "winner", "shortlist", "nominees", "受賞",
-    "webinar", "conference", "summit", "meetup", "live event",
-    "case study", "customer story", "success story", "事例紹介",
-    "promotion", "promo code", "discount", "セール",
-    "sponsored", "advertisement",
-]
-
-ZENN_TITLE_BLACKLIST = [
-    "入門", "はじめて", "はじめての", "初心者", "初めて", "初学者",
-    "for beginners", "getting started", "quick start", "quickstart",
-    "基礎", "基本", "とは？", "とは ", "って何",
-    "やってみた", "してみた", "使ってみた", "試してみた", "触ってみた",
-    "作ってみた", "書いてみた", "調べてみた",
-    "まとめてみた", "比較してみた", "まとめました",
-    "週報", "日報", "振り返り", "ふりかえり", "アドベントカレンダー",
-    "自己紹介", "学習記録", "勉強記録", "転職", "未経験",
-]
-
-DESIGN_PRODUCT_CATEGORIES = (
-    "design_mobile", "design_ec", "design_tools", "design_a11y", "design_system"
-)
-
-ZENN_FEED_URLS = {
-    "https://zenn.dev/topics/flutter/feed",
-    "https://zenn.dev/topics/swift/feed",
-    "https://zenn.dev/topics/android/feed",
-    "https://zenn.dev/topics/claudecode/feed",
-    "https://zenn.dev/topics/cursor/feed",
-    "https://zenn.dev/topics/githubcopilot/feed",
-}
-
-
-def is_blocked_by_blacklist(title: str, category: str, is_zenn: bool = False) -> bool:
-    if not title:
-        return False
-    lowered = title.lower()
-    if category == "ai_coding":
-        if any(kw in lowered for kw in AI_CODING_TITLE_BLACKLIST):
-            return True
-    if category in DESIGN_PRODUCT_CATEGORIES:
-        if any(kw in lowered for kw in DESIGN_PRODUCT_TITLE_BLACKLIST):
-            return True
-    if is_zenn:
-        if any(kw in lowered for kw in ZENN_TITLE_BLACKLIST):
-            return True
-    return False
-
-
-# ==================== Codemagic タグルーティング ====================
-
-CODEMAGIC_TAG_ROUTING = [
-    (["flutter"],                                                "mobile", "flutter",  "🔩"),
-    (["dart"],                                                   "mobile", "flutter",  "🔩"),
-    (["react-native", "react native", "ionic", "xamarin"],       "mobile", "android",  "🔩"),
-    (["android", "kotlin", "jetpack", "compose", "google play"], "mobile", "android",  "🔩"),
-    (["ios", "swift", "xcode", "testflight", "app store"],       "mobile", "swift",    "🔩"),
-]
-CODEMAGIC_DEFAULT_CHANNEL  = "tools"
-CODEMAGIC_DEFAULT_CATEGORY = "tools_vcs"
-CODEMAGIC_DEFAULT_EMOJI    = "🔩"
-
-
-def route_codemagic_entry(entry):
-    tags = {t.get("term", "").lower() for t in entry.get("tags", [])}
-    text = (entry.get("title", "") + " " + entry.get("summary", "")).lower()
-    for tag_list, channel, category, emoji in CODEMAGIC_TAG_ROUTING:
-        if any(t in tags or t in text for t in tag_list):
-            return channel, category, emoji
-    return CODEMAGIC_DEFAULT_CHANNEL, CODEMAGIC_DEFAULT_CATEGORY, CODEMAGIC_DEFAULT_EMOJI
-
-
-# ==================== フォーマットユーティリティ ====================
-
-def clean_html(raw: str) -> str:
-    """HTML タグと余分な空白を除去してプレーンテキストに変換"""
-    if not raw:
-        return ""
-    text = re.sub(r"<[^>]+>", " ", raw)
-    text = html_lib.unescape(text)
-    text = re.sub(r"\s+", " ", text).strip()
-    return text
-
-
-def make_summary(entry, max_chars: int = SUMMARY_MAX_CHARS) -> str:
-    """RSS エントリから要約テキストを生成（最大 max_chars 文字）"""
-    raw = (
-        getattr(entry, "summary", "")
-        or getattr(entry, "description", "")
-        or ""
-    )
-    text = clean_html(raw)
-    if not text:
-        return ""
-    if len(text) <= max_chars:
-        return text
-    # 文字数でカット、単語途中にならないよう調整
-    cut = text[:max_chars]
-    # 日本語混在を考慮: スペースか句読点で切れるなら手前で切る
-    for sep in [" ", "。", "、", "，", "."]:
-        idx = cut.rfind(sep)
-        if idx > max_chars * 0.7:
-            cut = cut[:idx]
-            break
-    return cut.rstrip(" ,.:;") + "…"
-
-
-def relative_time(entry) -> str:
-    """エントリの公開日時を「N時間前」「昨日」などの相対表現で返す"""
-    pub = None
-    if hasattr(entry, "published_parsed") and entry.published_parsed:
-        pub = datetime(*entry.published_parsed[:6], tzinfo=timezone.utc)
-    elif hasattr(entry, "updated_parsed") and entry.updated_parsed:
-        pub = datetime(*entry.updated_parsed[:6], tzinfo=timezone.utc)
-
-    if pub is None:
-        return ""
-
-    now = datetime.now(timezone.utc)
-    diff = now - pub
-    secs = diff.total_seconds()
-
-    if secs < 0:
-        return "たった今"
-    if secs < 3600:
-        m = max(1, int(secs // 60))
-        return f"{m}分前"
-    if secs < 86400:
-        h = int(secs // 3600)
-        return f"{h}時間前"
-    if secs < 86400 * 2:
-        return "昨日"
-    if secs < 86400 * 7:
-        d = int(secs // 86400)
-        return f"{d}日前"
-    if secs < 86400 * 30:
-        w = int(secs // (86400 * 7))
-        return f"{w}週間前"
-    m = int(secs // (86400 * 30))
-    return f"{m}ヶ月前"
-
-
-def make_title_exciting(title: str) -> str:
-    """タイトルに感情的な装飾を付与"""
-    t = title or ""
-    low = t.lower()
-    if any(w in low for w in ["release", "released", "available", "launches"]):
-        ver = re.search(r"\d+\.\d+(?:\.\d+)?", t)
-        return f"v{ver.group()} がリリース！🎉" if ver else f"{t} 🎉"
-    if any(w in low for w in ["beta", "preview", "rc", "alpha"]):
-        return f"{t} ⚡️"
-    if any(w in low for w in ["update", "new", "introducing", "announce"]):
-        return f"{t} ✨"
-    if any(w in low for w in ["fix", "hotfix", "patch"]):
-        return f"{t} 🔧"
-    return t
-
-
-# ==================== カテゴリ別アクセントカラー ====================
-# Slack の Block Kit には color サイドバーがあるので活用
-
-CATEGORY_COLORS = {
-    # Mobile
-    "flutter":        "#0175C2",
-    "swift":          "#FA7343",
-    "android":        "#3DDC84",
-    "release_mobile": "#00BFA5",
-    # Design
-    "design_thought": "#7C4DFF",
-    "design_graphic": "#FF6E40",
-    "design_typo":    "#795548",
-    "design_web":     "#039BE5",
-    "design_mobile":  "#1976D2",
-    "design_ec":      "#E64A19",
-    "design_tools":   "#F57C00",
-    "design_a11y":    "#388E3C",
-    "design_system":  "#512DA8",
-    # AI
-    "ai_coding":      "#6750A4",
-    "release_ai":     "#FF6B6B",
-    # Tools
-    "tools_vcs":      "#24292E",
-    "tools_pm":       "#0052CC",
-    "tools_infra":    "#FF9900",
-    "tools_dev":      "#007ACC",
-}
-
-RELEASE_CATEGORIES = {"release_mobile", "release_ai"}
-
-
-# ==================== Slack 投稿 ====================
-
-def post_to_slack(channel_id, text=None, blocks=None, attachments=None, thread_ts=None):
-    if not BOT_TOKEN or not channel_id:
-        return None
-    payload = {"channel": channel_id, "unfurl_links": False, "unfurl_media": False}
-    if text:
-        payload["text"] = text
-    if blocks:
-        payload["blocks"] = blocks
-    if attachments:
-        payload["attachments"] = attachments
-    if thread_ts:
-        payload["thread_ts"] = thread_ts
-    try:
-        resp = requests.post(
-            "https://slack.com/api/chat.postMessage",
-            json=payload,
-            headers={"Authorization": f"Bearer {BOT_TOKEN}", "Content-Type": "application/json"},
-            timeout=10,
-        )
-        data = resp.json()
-        if not data.get("ok"):
-            print(f"  ⚠️ Slack エラー: {data.get('error', 'unknown')}")
-            return None
-        return data.get("ts")
-    except Exception as e:
-        print(f"  ⚠️ Slack 投稿失敗: {e}")
-        return None
-
-
-def build_release_attachment(item: dict) -> dict:
-    """
-    リリース記事用アタッチメント（カラーサイドバー付きカード）
-    Slack の legacy attachments を使うことで左側のカラーバーが出る
-    """
-    entry    = item["entry"]
-    category = item["category"]
-    emoji    = item["emoji"]
-    title    = make_title_exciting(getattr(entry, "title", "タイトルなし"))
-    link     = getattr(entry, "link", "")
-    summary  = make_summary(entry)
-    rel_time = relative_time(entry)
-    color    = CATEGORY_COLORS.get(category, "#888888")
-
-    # フッター: ソース名 + 相対時刻
-    feed_name = item.get("feed_name", "")
-    footer_parts = [p for p in [feed_name, rel_time] if p]
-    footer = "  ·  ".join(footer_parts)
-
-    text_parts = [f"*<{link}|{title}>*"]
-    if summary:
-        text_parts.append(summary)
-
-    return {
-        "color":       color,
-        "text":        "\n".join(text_parts),
-        "footer":      footer,
-        "footer_icon": "https://slack-imgs.com/?c=1&o1=ro&url=https%3A%2F%2Fgithub.com%2Ffavicon.ico",
-        "mrkdwn_in":   ["text"],
-    }
-
-
-def build_compact_list_blocks(items: list, category: str) -> list:
-    """
-    Tips・ブログ記事用コンパクトリストのブロック群を返す。
-    記事を mrkdwn のセクションとして並べる。
-    """
-    color = CATEGORY_COLORS.get(category, "#888888")
-    lines = []
-
-    for item in items:
-        entry    = item["entry"]
-        emoji    = item["emoji"]
-        title    = make_title_exciting(getattr(entry, "title", "タイトルなし"))
-        link     = getattr(entry, "link", "")
-        summary  = make_summary(entry)
-        rel_time = relative_time(entry)
-        feed_name = item.get("feed_name", "")
-
-        meta_parts = [p for p in [feed_name, rel_time] if p]
-        meta = "  ·  ".join(meta_parts)
-
-        line = f"{emoji}  *<{link}|{title}>*"
-        if summary:
-            line += f"\n{summary}"
-        if meta:
-            line += f"\n_{meta}_"
-        lines.append(line)
-
-    # 1つの attachment にリストをまとめる（カラーバー付き）
-    return [{
-        "color":     color,
-        "text":      "\n\n".join(lines),
-        "mrkdwn_in": ["text"],
-    }]
-
-
-def post_category_with_thread(category_key, items, channel_id, categories_meta):
-    """
-    カテゴリの親メッセージを投稿し、スレッドに記事を流す。
-    release カテゴリ → 1記事ごとにカードとしてスレッドへ
-    その他         → まとめてコンパクトリストとしてスレッドへ（5件ごとに分割）
-    """
-    if not items:
-        return
-
-    cat      = categories_meta[category_key]
-    count    = len(items)
-    is_release = category_key in RELEASE_CATEGORIES
-
-    # 親メッセージ
-    parent_blocks = [
-        {
-            "type": "header",
-            "text": {"type": "plain_text", "text": f"{cat['emoji']} {cat['name']}", "emoji": True},
-        },
-        {
-            "type": "section",
-            "text": {"type": "mrkdwn", "text": f"*{count} 件* の新着情報　💬 スレッドで詳細をチェック"},
-        },
-    ]
-
-    print(f"\n  📤 {cat['name']} ({count}件) [{'リリースカード' if is_release else 'コンパクトリスト'}]")
-    thread_ts = post_to_slack(channel_id, text=f"{cat['name']} ({count}件)", blocks=parent_blocks)
-    if not thread_ts:
-        return
-
-    if is_release:
-        # リリースカード: 1記事ごとに attachment で投稿
-        for item in items:
-            title = make_title_exciting(getattr(item["entry"], "title", ""))
-            post_to_slack(
-                channel_id,
-                text=title,
-                attachments=[build_release_attachment(item)],
-                thread_ts=thread_ts,
-            )
-    else:
-        # コンパクトリスト: 5件ごとにまとめて投稿（Slack のブロック制限対策）
-        chunk_size = 5
-        for i in range(0, len(items), chunk_size):
-            chunk = items[i:i + chunk_size]
-            attachments = build_compact_list_blocks(chunk, category_key)
-            post_to_slack(
-                channel_id,
-                text=f"{cat['name']} {i+1}〜{i+len(chunk)}件",
-                attachments=attachments,
-                thread_ts=thread_ts,
-            )
-
-
-# ==================== フィード定義 ====================
-
+# ============================================
+# RSS / Atom フィード定義
+#   (name, url, category, emoji, channel)
+# ============================================
 FEEDS = [
-    # ============================================================
-    # 📱 モバイル ブログ・Tips (#mobile-dev)
-    # ============================================================
-    ("Flutter Blog",              "https://medium.com/feed/flutter",                                       "flutter", "📝", "mobile"),
-    ("Flutter Community",         "https://medium.com/feed/flutter-community",                             "flutter", "💎", "mobile"),
-    ("Code with Andrea",          "https://codewithandrea.com/rss.xml",                                    "flutter", "🎓", "mobile"),
-    ("FlutterDev Reddit",         "https://www.reddit.com/r/FlutterDev/.rss",                              "flutter", "🔧", "mobile"),
-    ("Very Good Ventures Blog",   "https://verygood.ventures/blog-category/tech/rss.xml",                  "flutter", "🏗️", "mobile"),
-    ("Zenn: Flutter",             "https://zenn.dev/topics/flutter/feed",                                  "flutter", "🇯🇵", "mobile"),
-    ("Hacking with Swift",        "https://www.hackingwithswift.com/articles/rss",                         "swift",   "💻", "mobile"),
-    ("SwiftLee",                  "https://www.avanderlee.com/feed/",                                      "swift",   "🎨", "mobile"),
-    ("Swift by Sundell",          "https://www.swiftbysundell.com/feed/",                                  "swift",   "💡", "mobile"),
-    ("NSHipster",                 "https://nshipster.com/feed.xml",                                        "swift",   "🔍", "mobile"),
-    ("Donny Wals",                "https://www.donnywals.com/feed/",                                       "swift",   "📚", "mobile"),
-    ("Point-Free",                "https://www.pointfree.co/blog/rss.xml",                                 "swift",   "🎯", "mobile"),
-    ("Swift with Vincent",        "https://www.swiftwithvincent.com/blog/rss.xml",                         "swift",   "🛠️", "mobile"),
-    ("iOS Dev Weekly",            "https://iosdevweekly.com/issues.rss",                                   "swift",   "📰", "mobile"),
-    ("Zenn: Swift",               "https://zenn.dev/topics/swift/feed",                                    "swift",   "🇯🇵", "mobile"),
-    ("Android Weekly",            "https://androidweekly.net/rss",                                         "android", "📰", "mobile"),
-    ("ProAndroidDev",             "https://proandroiddev.com/feed",                                         "android", "⭐", "mobile"),
-    ("Joe Birch",                 "https://joebirch.co/feed/",                                              "android", "🎯", "mobile"),
-    ("Styling Android",           "https://blog.stylingandroid.com/feed/",                                  "android", "🎨", "mobile"),
-    ("Pushing Pixels",            "https://pushing-pixels.org/feed",                                        "android", "✨", "mobile"),
-    ("Philipp Lackner",           "https://pl-coding.com/feed/",                                            "android", "📝", "mobile"),
-    ("Chris Banes",               "https://chris.banes.dev/rss.xml",                                        "android", "🏗️", "mobile"),
-    ("Zenn: Android",             "https://zenn.dev/topics/android/feed",                                   "android", "🇯🇵", "mobile"),
-    ("Codemagic Blog",            "https://blog.codemagic.io/index.xml",                                    "_codemagic", "🔩", "_codemagic", "codemagic"),
+    # ============================================
+    # 📱 モバイル開発系 (#mobile-dev) — 既存維持
+    # ============================================
+    # Flutter & Dart
+    ("Flutter Releases", "https://github.com/flutter/flutter/releases.atom", "flutter", "🚀", "mobile"),
+    ("Dart SDK Releases", "https://github.com/dart-lang/sdk/releases.atom", "flutter", "🎯", "mobile"),
+    ("Flutter Blog", "https://medium.com/feed/flutter", "flutter", "📝", "mobile"),
+    ("Flutter Community", "https://medium.com/feed/flutter-community", "flutter", "💎", "mobile"),
+    ("Code with Andrea", "https://codewithandrea.com/rss.xml", "flutter", "🎓", "mobile"),
+    ("FlutterDev Reddit", "https://www.reddit.com/r/FlutterDev/.rss", "flutter", "🔧", "mobile"),
 
-    # ============================================================
-    # 🚀 モバイル 公式リリース (#mobile-releases)
-    # ============================================================
-    ("Flutter Releases",          "https://github.com/flutter/flutter/releases.atom",                      "release_mobile", "🚀", "mobile_releases"),
-    ("Dart SDK Releases",         "https://github.com/dart-lang/sdk/releases.atom",                        "release_mobile", "🎯", "mobile_releases"),
-    ("Swift.org Blog",            "https://www.swift.org/atom.xml",                                        "release_mobile", "⚡️", "mobile_releases"),
-    ("Apple Developer News",      "https://developer.apple.com/news/rss/news.rss",                         "release_mobile", "🍎", "mobile_releases"),
-    ("Android Developers Blog",   "https://android-developers.googleblog.com/feeds/posts/default",         "release_mobile", "🤖", "mobile_releases"),
-    ("Kotlin Blog",               "https://blog.jetbrains.com/kotlin/feed/",                               "release_mobile", "💡", "mobile_releases"),
-    ("Compose Releases",          "https://github.com/JetBrains/compose-multiplatform/releases.atom",      "release_mobile", "🔷", "mobile_releases"),
+    # Swift & iOS
+    ("Swift.org Blog", "https://www.swift.org/atom.xml", "swift", "⚡️", "mobile"),
+    ("Apple Developer News", "https://developer.apple.com/news/rss/news.rss", "swift", "🍎", "mobile"),
+    ("Hacking with Swift", "https://www.hackingwithswift.com/articles/rss", "swift", "💻", "mobile"),
+    ("SwiftLee", "https://www.avanderlee.com/feed/", "swift", "🎨", "mobile"),
+    ("Swift by Sundell", "https://www.swiftbysundell.com/feed/", "swift", "💡", "mobile"),
+    ("NSHipster", "https://nshipster.com/feed.xml", "swift", "🔍", "mobile"),
+    ("Donny Wals", "https://www.donnywals.com/feed/", "swift", "📚", "mobile"),
+    ("Point-Free", "https://www.pointfree.co/blog/rss.xml", "swift", "🎯", "mobile"),
+    ("Swift with Vincent", "https://www.swiftwithvincent.com/blog/rss.xml", "swift", "🛠️", "mobile"),
+    ("iOS Dev Weekly", "https://iosdevweekly.com/issues.rss", "swift", "📰", "mobile"),
 
-    # ============================================================
-    # 🎨 デザイン 思想・論考 (#design-trends)
-    # ============================================================
-    ("A List Apart",              "https://alistapart.com/main/feed/",                                     "design_thought", "📐", "design"),
-    ("UX Collective",             "https://uxdesign.cc/feed",                                              "design_thought", "💡", "design"),
-    ("Smashing Magazine",         "https://www.smashingmagazine.com/feed/",                                "design_thought", "🎨", "design"),
-    ("IxDF",                      "https://www.interaction-design.org/literature/rss",                     "design_thought", "📊", "design"),
-    ("Creative Bloq",             "https://www.creativebloq.com/feed",                                     "design_graphic", "🎨", "design"),
-    ("Designmodo",                "https://designmodo.com/feed/",                                          "design_graphic", "🌈", "design"),
-    ("Abduzeedo",                 "https://abduzeedo.com/rss.xml",                                         "design_graphic", "💫", "design"),
-    ("Awwwards",                  "https://www.awwwards.com/blog/feed/",                                   "design_graphic", "💎", "design"),
-    ("Typewolf",                  "https://www.typewolf.com/feed",                                         "design_typo",    "📝", "design"),
-    ("Fonts In Use",              "https://fontsinuse.com/rss",                                            "design_typo",    "✍️", "design"),
-    ("I Love Typography",         "https://ilovetypography.com/feed/",                                     "design_typo",    "🔤", "design"),
-    ("CSS-Tricks",                "https://css-tricks.com/feed/",                                          "design_web",     "🌐", "design"),
-    ("Codrops",                   "https://tympanus.net/codrops/feed/",                                    "design_web",     "🎯", "design"),
-    ("Web Designer Depot",        "https://www.webdesignerdepot.com/feed/",                                "design_web",     "🚀", "design"),
+    # Android & Kotlin
+    ("Android Developers Blog", "https://android-developers.googleblog.com/feeds/posts/default", "android", "🤖", "mobile"),
+    ("Kotlin Blog", "https://blog.jetbrains.com/kotlin/feed/", "android", "💡", "mobile"),
+    ("Android Weekly", "https://androidweekly.net/rss", "android", "📰", "mobile"),
+    ("Joe Birch", "https://joebirch.co/feed/", "android", "🎯", "mobile"),
+    ("Styling Android", "https://blog.stylingandroid.com/feed/", "android", "🎨", "mobile"),
+    ("Compose Releases", "https://github.com/JetBrains/compose-multiplatform/releases.atom", "android", "🔷", "mobile"),
+    ("Philipp Lackner", "https://pl-coding.com/feed/", "android", "📝", "mobile"),
+    ("Chris Banes", "https://chris.banes.dev/rss.xml", "android", "🏗️", "mobile"),
 
-    # ============================================================
-    # 🛍️ デザイン プロダクト実務 (#design-product)
-    # ============================================================
-    ("Material Design Blog",      "https://material.io/feed.xml",                                         "design_mobile",  "📱", "design_product"),
-    ("Apple Developer News",      "https://developer.apple.com/news/rss/news.rss",                        "design_mobile",  "🍎", "design_product"),
-    ("Android Developers Blog",   "https://android-developers.googleblog.com/feeds/posts/default",        "design_mobile",  "🤖", "design_product"),
-    ("Baymard Institute",         "https://baymard.com/blog/rss",                                         "design_ec",      "🛒", "design_product"),
-    ("Figma Blog",                "https://www.figma.com/blog/rss/",                                      "design_tools",   "🔷", "design_product"),
-    ("Adobe Create",              "https://blog.adobe.com/en/topics/creativity/feed",                     "design_tools",   "🖼️", "design_product"),
-    ("Nielsen Norman Group",      "https://www.nngroup.com/feed/rss/",                                    "design_a11y",    "🧪", "design_product"),
-    ("Laws of UX",                "https://lawsofux.com/rss.xml",                                         "design_a11y",    "⚖️", "design_product"),
-    ("Deque Blog",                "https://www.deque.com/blog/feed/",                                     "design_a11y",    "♿", "design_product"),
-    ("W3C WAI News",              "https://www.w3.org/WAI/news/feed/",                                    "design_a11y",    "🌐", "design_product"),
-    ("UX Design Institute",       "https://www.uxdesigninstitute.com/blog/feed/",                         "design_system",  "🎯", "design_product"),
-    ("RWD Weekly",                "https://responsivedesign.is/rss/",                                     "design_system",  "📲", "design_product"),
+    # ============================================
+    # 🎨 デザイン系 (#design-trends) — 既存維持
+    # ============================================
+    ("Nielsen Norman Group", "https://www.nngroup.com/feed/rss/", "design_ux", "🧪", "design"),
+    ("Smashing Magazine", "https://www.smashingmagazine.com/feed/", "design_ux", "🎨", "design"),
+    ("A List Apart", "https://alistapart.com/main/feed/", "design_ux", "📐", "design"),
+    ("UX Collective", "https://uxdesign.cc/feed", "design_ux", "💡", "design"),
+    ("Figma Blog", "https://www.figma.com/blog/rss/", "design_ux", "🔷", "design"),
+    ("Laws of UX", "https://lawsofux.com/rss.xml", "design_ux", "⚖️", "design"),
+    ("UX Design Institute", "https://www.uxdesigninstitute.com/blog/feed/", "design_ux", "🎯", "design"),
+    ("IxDF", "https://www.interaction-design.org/literature/rss", "design_ux", "📊", "design"),
+    ("Adobe Create", "https://blog.adobe.com/en/topics/creativity/feed", "design_graphic", "🖼️", "design"),
+    ("Creative Bloq", "https://www.creativebloq.com/feed", "design_graphic", "🎨", "design"),
+    ("Designmodo", "https://designmodo.com/feed/", "design_graphic", "🌈", "design"),
+    ("Abduzeedo", "https://abduzeedo.com/rss.xml", "design_graphic", "💫", "design"),
+    ("Typewolf", "https://www.typewolf.com/feed", "design_typo", "📝", "design"),
+    ("Fonts In Use", "https://fontsinuse.com/rss", "design_typo", "✍️", "design"),
+    ("I Love Typography", "https://ilovetypography.com/feed/", "design_typo", "🔤", "design"),
+    ("CSS-Tricks", "https://css-tricks.com/feed/", "design_web", "🌐", "design"),
+    ("Codrops", "https://tympanus.net/codrops/feed/", "design_web", "🎯", "design"),
+    ("Awwwards", "https://www.awwwards.com/blog/feed/", "design_web", "💎", "design"),
+    ("Web Designer Depot", "https://www.webdesignerdepot.com/feed/", "design_web", "🚀", "design"),
+    ("RWD Weekly", "https://responsivedesign.is/rss/", "design_web", "📱", "design"),
 
-    # ============================================================
-    # 💻 AI Coding Tips (#ai-coding-tools)
-    # ============================================================
-    ("Zenn: Claude Code",         "https://zenn.dev/topics/claudecode/feed",                              "ai_coding", "📘", "ai"),
-    ("Zenn: Cursor",              "https://zenn.dev/topics/cursor/feed",                                  "ai_coding", "📗", "ai"),
-    ("Zenn: GitHub Copilot",      "https://zenn.dev/topics/githubcopilot/feed",                           "ai_coding", "📕", "ai"),
-    ("Simon Willison",            "https://simonwillison.net/atom/everything/",                           "ai_coding", "🧵", "ai"),
-    ("OpenAI News",               "https://openai.com/news/rss.xml",                                     "ai_coding", "🟢", "ai"),
+    # ============================================
+    # 🧠 AI & ML 系 (#ai-ml-news) — 再設計
+    # ============================================
 
-    # ============================================================
-    # ⚡ AI 公式リリース (#ai-releases)
-    # ============================================================
-    ("Claude Code Releases",      "https://github.com/anthropics/claude-code/releases.atom",             "release_ai", "🤖", "ai_releases"),
-    ("OpenAI Codex Releases",     "https://github.com/openai/codex/releases.atom",                       "release_ai", "🛠️", "ai_releases"),
-    ("Gemini CLI Releases",       "https://github.com/google-gemini/gemini-cli/releases.atom",           "release_ai", "✨", "ai_releases"),
-    ("GitHub Copilot Changelog",  "https://github.blog/changelog/label/copilot/feed/",                   "release_ai", "🐙", "ai_releases"),
+    # --- ai_official: 公式リリース・モデル発表(フィルタ無し・全件通す) ---
+    ("OpenAI Blog", "https://openai.com/blog/rss/", "ai_official", "🧠", "ai"),
+    ("Anthropic News", "https://www.anthropic.com/news/rss", "ai_official", "🤖", "ai"),
+    ("Google AI Blog", "https://blog.research.google/feeds/posts/default", "ai_official", "🔬", "ai"),
+    ("Hugging Face", "https://huggingface.co/blog/feed.xml", "ai_official", "🤗", "ai"),
+    ("Meta AI", "https://ai.meta.com/blog/rss/", "ai_official", "🦾", "ai"),
+    ("DeepMind", "https://deepmind.google/blog/rss.xml", "ai_official", "🎯", "ai"),
+    ("Mistral AI", "https://mistral.ai/news/rss/", "ai_official", "⚡️", "ai"),
 
-    # ============================================================
-    # 🔬 [将来用] 研究論文系 (無効化中)
-    # ============================================================
-    # ("OpenAI Blog",     "https://openai.com/blog/rss/",                      "ai_research", "🧠", "research"),
-    # ("Anthropic News",  "https://www.anthropic.com/news/rss",                "ai_research", "🤖", "research"),
-    # ("Google AI Blog",  "https://blog.research.google/feeds/posts/default",  "ai_research", "🔬", "research"),
-    # ("Hugging Face",    "https://huggingface.co/blog/feed.xml",              "ai_research", "🤗", "research"),
-    # ("Meta AI",         "https://ai.meta.com/blog/rss/",                     "ai_research", "🦾", "research"),
-    # ("DeepMind",        "https://deepmind.google/blog/rss.xml",              "ai_research", "🎯", "research"),
-    # ("Stability AI",    "https://stability.ai/news/rss",                     "ai_research", "🔵", "research"),
-    # ("Mistral AI",      "https://mistral.ai/news/rss/",                      "ai_research", "⚡️", "research"),
-    # ("LangChain Blog",  "https://blog.langchain.dev/rss/",                   "ai_tools",    "🛠️", "research"),
-    # ("LlamaIndex",      "https://www.llamaindex.ai/blog/rss.xml",            "ai_tools",    "🔗", "research"),
-    # ("The Batch",       "https://www.deeplearning.ai/the-batch/feed/",       "ai_news",     "🎙️", "research"),
-    # ("Papers with Code","https://paperswithcode.com/feed.xml",               "ai_news",     "🔍", "research"),
+    # --- ai_practice: 活用術・実装ノウハウ(キーワードフィルタ適用) ---
+    # 高品質個人/公式
+    ("Simon Willison", "https://simonwillison.net/atom/everything/", "ai_practice", "✨", "ai"),
+    ("Anthropic Engineering", "https://www.anthropic.com/engineering/rss.xml", "ai_practice", "🔧", "ai"),
+    # Medium タグフィード(キーワードフィルタで厳選)
+    ("Medium - Claude", "https://medium.com/feed/tag/claude", "ai_practice", "🤖", "ai"),
+    ("Medium - Claude Code", "https://medium.com/feed/tag/claude-code", "ai_practice", "💻", "ai"),
+    ("Medium - GitHub Copilot", "https://medium.com/feed/tag/github-copilot", "ai_practice", "🐙", "ai"),
+    ("Medium - Cursor", "https://medium.com/feed/tag/cursor", "ai_practice", "🖱️", "ai"),
+    ("Medium - Prompt Engineering", "https://medium.com/feed/tag/prompt-engineering", "ai_practice", "✏️", "ai"),
+    ("Medium - LLM", "https://medium.com/feed/tag/large-language-models", "ai_practice", "📚", "ai"),
 
-    # ============================================================
-    # ⚙️ ツール・サービス (#dev-tools-services)
-    # ============================================================
-    ("GitHub Blog",               "https://github.blog/feed/",                                           "tools_vcs",   "⚙️", "tools"),
-    ("GitLab Blog",               "https://about.gitlab.com/atom.xml",                                   "tools_vcs",   "🦊", "tools"),
-    ("CircleCI",                  "https://circleci.com/blog/feed.xml",                                  "tools_vcs",   "🔄", "tools"),
-    ("Jenkins Blog",              "https://www.jenkins.io/node/feed.xml",                                "tools_vcs",   "🚀", "tools"),
-    ("Notion Blog",               "https://www.notion.so/blog/rss",                                     "tools_pm",    "📓", "tools"),
-    ("Linear Blog",               "https://linear.app/blog/rss.xml",                                    "tools_pm",    "📊", "tools"),
-    ("Jira Software",             "https://www.atlassian.com/blog/jira-software/feed",                  "tools_pm",    "🎯", "tools"),
-    ("Slack Engineering",         "https://slack.engineering/feed/",                                     "tools_pm",    "💬", "tools"),
-    ("Vercel Blog",               "https://vercel.com/blog/rss.xml",                                    "tools_infra", "▲",  "tools"),
-    ("Railway Blog",              "https://blog.railway.app/rss.xml",                                   "tools_infra", "🚂", "tools"),
-    ("AWS News",                  "https://aws.amazon.com/blogs/aws/feed/",                             "tools_infra", "☁️", "tools"),
-    ("Azure Updates",             "https://azure.microsoft.com/en-us/updates/feed/",                    "tools_infra", "🔵", "tools"),
-    ("Cloudflare Blog",           "https://blog.cloudflare.com/rss/",                                   "tools_infra", "🌐", "tools"),
-    ("Docker Blog",               "https://www.docker.com/blog/feed/",                                  "tools_infra", "🐳", "tools"),
-    ("VS Code Blog",              "https://code.visualstudio.com/feed.xml",                             "tools_dev",   "🎨", "tools"),
-    ("JetBrains Blog",            "https://blog.jetbrains.com/feed/",                                   "tools_dev",   "🔧", "tools"),
-    ("Raycast Blog",              "https://www.raycast.com/blog/rss.xml",                               "tools_dev",   "🌙", "tools"),
-    ("npm Blog",                  "https://blog.npmjs.org/rss.xml",                                     "tools_dev",   "📦", "tools"),
+    # --- ai_devtools: LLM 開発系ツール(フィルタ無し) ---
+    ("LangChain Blog", "https://blog.langchain.dev/rss/", "ai_devtools", "🛠️", "ai"),
+    ("LlamaIndex", "https://www.llamaindex.ai/blog/rss.xml", "ai_devtools", "🔗", "ai"),
+    ("Replicate Blog", "https://replicate.com/blog/rss.xml", "ai_devtools", "🔄", "ai"),
+
+    # --- ai_research: 論文・研究(フィルタ無し) ---
+    ("The Batch", "https://www.deeplearning.ai/the-batch/feed/", "ai_research", "🎙️", "ai"),
+    ("Papers with Code", "https://paperswithcode.com/feed.xml", "ai_research", "🔍", "ai"),
+
+    # ============================================
+    # ⚙️ ツール・サービス系 (#dev-tools-services) — 既存維持
+    # ============================================
+    ("GitHub Blog", "https://github.blog/feed/", "tools_vcs", "⚙️", "tools"),
+    ("GitLab Blog", "https://about.gitlab.com/atom.xml", "tools_vcs", "🦊", "tools"),
+    ("CircleCI", "https://circleci.com/blog/feed.xml", "tools_vcs", "🔄", "tools"),
+    ("Jenkins Blog", "https://www.jenkins.io/node/feed.xml", "tools_vcs", "🚀", "tools"),
+    ("Notion Blog", "https://www.notion.so/blog/rss", "tools_pm", "📓", "tools"),
+    ("Linear Blog", "https://linear.app/blog/rss.xml", "tools_pm", "📊", "tools"),
+    ("Jira Software", "https://www.atlassian.com/blog/jira-software/feed", "tools_pm", "🎯", "tools"),
+    ("Slack Engineering", "https://slack.engineering/feed/", "tools_pm", "💬", "tools"),
+    ("Vercel Blog", "https://vercel.com/blog/rss.xml", "tools_infra", "▲", "tools"),
+    ("Railway Blog", "https://blog.railway.app/rss.xml", "tools_infra", "🚂", "tools"),
+    ("AWS News", "https://aws.amazon.com/blogs/aws/feed/", "tools_infra", "☁️", "tools"),
+    ("Azure Updates", "https://azure.microsoft.com/en-us/updates/feed/", "tools_infra", "🔵", "tools"),
+    ("Cloudflare Blog", "https://blog.cloudflare.com/rss/", "tools_infra", "🌐", "tools"),
+    ("Docker Blog", "https://www.docker.com/blog/feed/", "tools_infra", "🐳", "tools"),
+    ("VS Code Blog", "https://code.visualstudio.com/feed.xml", "tools_dev", "🎨", "tools"),
+    ("JetBrains Blog", "https://blog.jetbrains.com/feed/", "tools_dev", "🔧", "tools"),
+    ("Raycast Blog", "https://www.raycast.com/blog/rss.xml", "tools_dev", "🌙", "tools"),
+    ("npm Blog", "https://blog.npmjs.org/rss.xml", "tools_dev", "📦", "tools"),
 ]
+
+# ============================================
+# Zenn API ソース定義(RSS ではなく JSON API を直接叩く)
+#   (display_name, topic, emoji, channel, category)
+# ============================================
+ZENN_SOURCES = [
+    ("Zenn - Claude Code", "claudecode", "💻", "ai", "ai_practice"),
+    ("Zenn - Claude", "claude", "🤖", "ai", "ai_practice"),
+    ("Zenn - GitHub Copilot", "githubcopilot", "🐙", "ai", "ai_practice"),
+    ("Zenn - Cursor", "cursor", "🖱️", "ai", "ai_practice"),
+    ("Zenn - LLM", "llm", "📚", "ai", "ai_practice"),
+    ("Zenn - Prompt Engineering", "プロンプトエンジニアリング", "✏️", "ai", "ai_practice"),
+    ("Zenn - Codex", "codex", "🤖", "ai", "ai_practice"),
+    ("Zenn - 生成AI", "生成ai", "🌟", "ai", "ai_practice"),
+]
+
+# Zenn の LGTM 閾値(これ以上の "いいね" がついた記事のみ取得)
+ZENN_LGTM_THRESHOLD = 30
+
+# Zenn 記事の最大鮮度(これより古い記事は無視。日数)
+ZENN_MAX_AGE_DAYS = 7
+
+
+# ============================================
+# キーワードフィルタ設定
+# ============================================
+FILTER_RULES = {
+    # ai_practice カテゴリのみフィルタ適用
+    "ai_practice": {
+        "mode": "include",
+        # 以下のキーワードのいずれかが含まれていれば通す(タイトル+概要に対し)
+        "keywords": [
+            # ツール名
+            "claude code", "claude", "codex", "copilot", "cursor",
+            "windsurf", "cline", "aider", "continue.dev",
+            "chatgpt", "gemini", "gpt-4", "gpt-5", "o1", "o3",
+            # 活用カテゴリ
+            "agent", "agentic", "mcp", "rag",
+            "prompt engineering", "prompt", "system prompt",
+            "automation", "workflow", "tutorial", "guide", "how to",
+            "lesson", "tips", "best practice", "playbook",
+            "subagent", "sub-agent", "multi-agent",
+            # 日本語(タイトルに混入するケース対応)
+            "活用", "使い方", "自動化", "業務効率", "プロンプト",
+        ],
+        # これらが含まれていたら除外(SEO釣りタイトル対策)
+        "exclude": [
+            "you won't believe",
+            "shocking",
+            "i made $",
+            "i earned",
+            "millionaire",
+            "10x your",
+            "become a",  # "Become a 10x developer" のような煽りタイトル排除
+        ],
+        # 短すぎるタイトルは弱い記事が多い
+        "min_title_length": 15,
+    },
+    # それ以外のカテゴリは passthrough(全件通す)
+}
+
+
+# ============================================
+# カテゴリ別投稿上限(ノイズ抑制)
+# ============================================
+MAX_PER_CATEGORY = {
+    # AI
+    "ai_official": 15,    # 公式は重要なので多め
+    "ai_practice": 10,    # 活用術は厳選
+    "ai_devtools": 8,
+    "ai_research": 5,
+    # それ以外はデフォルト無制限(None)
+}
+
+
+# ============================================
+# カテゴリ表示情報
+# ============================================
+CATEGORIES = {
+    # Mobile
+    "flutter": {"name": "Flutter & Dart", "emoji": "📦"},
+    "swift": {"name": "Swift & iOS", "emoji": "🍎"},
+    "android": {"name": "Android & Kotlin", "emoji": "🤖"},
+    # Design
+    "design_ux": {"name": "UI/UX Design", "emoji": "🎨"},
+    "design_graphic": {"name": "Graphic Design", "emoji": "🖼️"},
+    "design_typo": {"name": "Typography", "emoji": "📝"},
+    "design_web": {"name": "Web Design", "emoji": "🌐"},
+    # AI(再設計)
+    "ai_official": {"name": "AI Official Releases", "emoji": "🚀"},
+    "ai_practice": {"name": "AI Practice & Tips", "emoji": "💡"},
+    "ai_devtools": {"name": "AI Dev Tools", "emoji": "🛠️"},
+    "ai_research": {"name": "AI Research", "emoji": "🔬"},
+    # Tools
+    "tools_vcs": {"name": "Version Control & CI/CD", "emoji": "⚙️"},
+    "tools_pm": {"name": "Project Management", "emoji": "📊"},
+    "tools_infra": {"name": "Hosting & Infrastructure", "emoji": "☁️"},
+    "tools_dev": {"name": "Developer Tools", "emoji": "🔧"},
+}
+
+# チャンネルごとのカテゴリ表示順
+CHANNEL_CATEGORIES = {
+    "mobile": ["flutter", "swift", "android"],
+    "design": ["design_ux", "design_graphic", "design_typo", "design_web"],
+    "ai": ["ai_official", "ai_practice", "ai_devtools", "ai_research"],
+    "tools": ["tools_vcs", "tools_pm", "tools_infra", "tools_dev"],
+}
 
 SEEN_FILE = Path("seen_entries.json")
 INITIAL_HOURS = 48
 
-# ==================== カテゴリ定義 ====================
 
-CATEGORIES = {
-    "flutter":        {"name": "Flutter & Dart",                       "emoji": "📦"},
-    "swift":          {"name": "Swift & iOS",                          "emoji": "🍎"},
-    "android":        {"name": "Android & Kotlin",                     "emoji": "🤖"},
-    "release_mobile": {"name": "公式リリース",                          "emoji": "🚀"},
-    "design_thought": {"name": "UI/UX 思想・論考",                      "emoji": "💭"},
-    "design_graphic": {"name": "Graphic & Visual",                     "emoji": "🖼️"},
-    "design_typo":    {"name": "Typography",                           "emoji": "📝"},
-    "design_web":     {"name": "Web Design",                           "emoji": "🌐"},
-    "design_mobile":  {"name": "モバイルアプリ設計",                    "emoji": "📱"},
-    "design_ec":      {"name": "EC/コマース UX",                        "emoji": "🛒"},
-    "design_tools":   {"name": "Figma / Adobe ツール情報",              "emoji": "🛠️"},
-    "design_a11y":    {"name": "HCD・アクセシビリティ",                  "emoji": "♿"},
-    "design_system":  {"name": "プロダクトデザイン・デザインシステム",  "emoji": "🧩"},
-    "ai_coding":      {"name": "AI Coding Tips・実践記事",             "emoji": "💻"},
-    "release_ai":     {"name": "公式リリース",                          "emoji": "⚡"},
-    "ai_research":    {"name": "AI Research",                          "emoji": "🧠"},
-    "ai_tools":       {"name": "AI Tools",                             "emoji": "🛠️"},
-    "ai_news":        {"name": "AI News",                              "emoji": "📰"},
-    "tools_vcs":      {"name": "Version Control & CI/CD",              "emoji": "⚙️"},
-    "tools_pm":       {"name": "Project Management",                   "emoji": "📊"},
-    "tools_infra":    {"name": "Hosting & Infrastructure",             "emoji": "☁️"},
-    "tools_dev":      {"name": "Developer Tools",                      "emoji": "🔧"},
-}
-
-CHANNEL_CATEGORIES = {
-    "mobile":          ["flutter", "swift", "android"],
-    "mobile_releases": ["release_mobile"],
-    "design":          ["design_thought", "design_graphic", "design_typo", "design_web"],
-    "design_product":  ["design_mobile", "design_ec", "design_tools", "design_a11y", "design_system"],
-    "ai":              ["ai_coding"],
-    "ai_releases":     ["release_ai"],
-    "tools":           ["tools_vcs", "tools_pm", "tools_infra", "tools_dev"],
-    # "research":      ["ai_research", "ai_tools", "ai_news"],
-}
-
-
-# ==================== コア処理 ====================
+# ==================== ユーティリティ ====================
 
 def load_seen_entries():
     if SEEN_FILE.exists():
         try:
-            with open(SEEN_FILE, "r", encoding="utf-8") as f:
+            with open(SEEN_FILE, 'r', encoding='utf-8') as f:
                 return json.load(f)
         except json.JSONDecodeError:
             return {}
@@ -571,20 +272,210 @@ def load_seen_entries():
 
 
 def save_seen_entries(seen):
-    with open(SEEN_FILE, "w", encoding="utf-8") as f:
+    with open(SEEN_FILE, 'w', encoding='utf-8') as f:
         json.dump(seen, f, ensure_ascii=False, indent=2)
 
 
 def parse_entry_date(entry):
-    if hasattr(entry, "published_parsed") and entry.published_parsed:
+    if hasattr(entry, 'published_parsed') and entry.published_parsed:
         return datetime(*entry.published_parsed[:6])
-    if hasattr(entry, "updated_parsed") and entry.updated_parsed:
+    elif hasattr(entry, 'updated_parsed') and entry.updated_parsed:
         return datetime(*entry.updated_parsed[:6])
     return datetime.now()
 
 
-def check_feed(feed_name, feed_url, category, emoji, channel, seen_entries,
-               is_first_run, is_zenn=False, is_codemagic=False):
+def make_title_exciting(title):
+    """タイトルをワクワクする表現に変換"""
+    if any(word in title.lower() for word in ['release', 'released', 'available', 'launches']):
+        version = re.search(r'\d+\.\d+(?:\.\d+)?', title)
+        if version:
+            return f"v{version.group()} がリリース！🎉"
+        return f"{title} 🎉"
+    if any(word in title.lower() for word in ['beta', 'preview', 'rc', 'alpha']):
+        return f"{title} ⚡️"
+    if any(word in title.lower() for word in ['update', 'new', 'introducing', 'announce']):
+        return f"{title} ✨"
+    if any(word in title.lower() for word in ['fix', 'hotfix', 'patch']):
+        return f"{title} 🔧"
+    return title
+
+
+# ==================== フィルタ ====================
+
+def get_entry_text(entry):
+    """エントリからフィルタ用のテキスト(title + summary)を抽出"""
+    title = getattr(entry, 'title', '') or ''
+    summary = getattr(entry, 'summary', '') or ''
+    # HTMLタグ簡易除去
+    summary = re.sub(r'<[^>]+>', ' ', summary)
+    return f"{title} {summary}".lower()
+
+
+def should_post(item):
+    """カテゴリ別フィルタを適用するかどうか判定"""
+    category = item["category"]
+    rule = FILTER_RULES.get(category)
+
+    # ルール無し → 全件通す
+    if rule is None:
+        return True
+
+    mode = rule.get("mode", "passthrough")
+    if mode == "passthrough":
+        return True
+
+    entry = item["entry"]
+    title = getattr(entry, 'title', '') or ''
+    text = get_entry_text(entry)
+
+    # 最低タイトル長チェック
+    if len(title) < rule.get("min_title_length", 0):
+        return False
+
+    # 除外キーワード
+    for ex in rule.get("exclude", []):
+        if ex.lower() in text:
+            return False
+
+    # 包含キーワード(include モード)
+    if mode == "include":
+        keywords = rule.get("keywords", [])
+        if not any(kw.lower() in text for kw in keywords):
+            return False
+
+    return True
+
+
+# ==================== Zenn API ====================
+
+def fetch_zenn_articles(topic, lgtm_threshold, max_age_days, seen_entries):
+    """
+    Zenn 非公式 API からトピックの新着記事を取得し、
+    LGTM 閾値・鮮度・既読でフィルタする
+    """
+    url = f"https://zenn.dev/api/articles?topicname={topic}&order=latest"
+    try:
+        # Zenn は bot 系UAを弾くことがあるためブラウザ風UAを送る
+        res = requests.get(url, timeout=15, headers={
+            "User-Agent": "Mozilla/5.0 (compatible; feed-slack-bot/2.0)",
+            "Accept": "application/json",
+        })
+        if not res.ok:
+            print(f"  ⚠️ Zenn API エラー: {res.status_code}")
+            return []
+        data = res.json()
+    except Exception as e:
+        print(f"  ⚠️ Zenn 取得失敗: {e}")
+        return []
+
+    articles = data.get("articles", [])
+    if not articles:
+        return []
+
+    cutoff = datetime.now(timezone.utc) - timedelta(days=max_age_days)
+    results = []
+
+    for art in articles:
+        # 公開記事のみ
+        if not art.get("published", True):
+            continue
+        # LGTM 閾値
+        if art.get("liked_count", 0) < lgtm_threshold:
+            continue
+        # 鮮度
+        try:
+            pub_at = datetime.fromisoformat(art["published_at"]).astimezone(timezone.utc)
+            if pub_at < cutoff:
+                continue
+        except (KeyError, ValueError):
+            continue
+        # tech 記事優先(idea は雑多なので除外)
+        if art.get("article_type") != "tech":
+            continue
+
+        link = f"https://zenn.dev{art['path']}"
+        if link in seen_entries:
+            continue
+
+        results.append({
+            "title": art["title"],
+            "link": link,
+            "liked_count": art["liked_count"],
+            "emoji": art.get("emoji", "📝"),
+            "published_at": art["published_at"],
+        })
+
+    return results
+
+
+def check_zenn_source(display_name, topic, emoji, channel, category, seen_entries):
+    """1つの Zenn トピックをチェック"""
+    print(f"📡 {display_name} (LGTM>={ZENN_LGTM_THRESHOLD})")
+    articles = fetch_zenn_articles(topic, ZENN_LGTM_THRESHOLD, ZENN_MAX_AGE_DAYS, seen_entries)
+    if not articles:
+        return []
+
+    print(f"  ✅ {len(articles)} 件 (人気記事)")
+
+    # feedparser エントリと同じ形に揃える(post_category_with_thread が共通で扱えるように)
+    items = []
+    for art in articles:
+        # 簡易な entry オブジェクト
+        class _Entry:
+            pass
+        e = _Entry()
+        e.title = f"{art['title']} 👍{art['liked_count']}"
+        e.link = art["link"]
+        items.append({
+            "feed_name": display_name,
+            "entry": e,
+            "emoji": art["emoji"] or emoji,
+            "category": category,
+            "channel": channel,
+            "entry_id": art["link"],
+        })
+    return items
+
+
+# ==================== Slack 投稿 ====================
+
+def post_to_slack(channel_id, text=None, blocks=None, thread_ts=None):
+    if not BOT_TOKEN or not channel_id:
+        return None
+    payload = {
+        "channel": channel_id,
+        "unfurl_links": False,
+        "unfurl_media": False,
+    }
+    if text:
+        payload["text"] = text
+    if blocks:
+        payload["blocks"] = blocks
+    if thread_ts:
+        payload["thread_ts"] = thread_ts
+    try:
+        response = requests.post(
+            "https://slack.com/api/chat.postMessage",
+            json=payload,
+            headers={
+                "Authorization": f"Bearer {BOT_TOKEN}",
+                "Content-Type": "application/json"
+            },
+            timeout=10
+        )
+        data = response.json()
+        if not data.get("ok"):
+            print(f"⚠️ Slack 投稿エラー: {data.get('error', 'unknown')}")
+            return None
+        return data.get("ts")
+    except Exception as e:
+        print(f"⚠️ Slack 投稿失敗: {e}")
+        return None
+
+
+# ==================== RSS ====================
+
+def check_feed(feed_name, feed_url, category, emoji, channel, seen_entries, is_first_run):
     print(f"📡 {feed_name}")
     try:
         feed = feedparser.parse(feed_url)
@@ -592,57 +483,90 @@ def check_feed(feed_name, feed_url, category, emoji, channel, seen_entries,
             return []
 
         new_entries = []
-        cutoff  = datetime.now() - timedelta(hours=INITIAL_HOURS) if is_first_run else None
-        filtered = 0
+        cutoff_time = datetime.now() - timedelta(hours=INITIAL_HOURS) if is_first_run else None
 
         for entry in feed.entries[:15]:
-            entry_id = getattr(entry, "link", None) or getattr(entry, "title", "")
+            entry_id = entry.link if hasattr(entry, 'link') else entry.title
             if entry_id in seen_entries:
                 continue
 
-            if is_first_run and cutoff:
-                if parse_entry_date(entry) < cutoff:
+            if is_first_run and cutoff_time:
+                entry_date = parse_entry_date(entry)
+                if entry_date < cutoff_time:
                     seen_entries[entry_id] = True
                     continue
 
-            title = getattr(entry, "title", "")
-
-            if is_codemagic:
-                resolved_channel, resolved_category, resolved_emoji = route_codemagic_entry(entry)
-            else:
-                resolved_channel  = channel
-                resolved_category = category
-                resolved_emoji    = emoji
-
-            if is_blocked_by_blacklist(title, resolved_category, is_zenn=is_zenn):
-                seen_entries[entry_id] = True
-                filtered += 1
-                continue
-
             new_entries.append({
                 "feed_name": feed_name,
-                "entry":     entry,
-                "emoji":     resolved_emoji,
-                "category":  resolved_category,
-                "channel":   resolved_channel,
-                "entry_id":  entry_id,
+                "entry": entry,
+                "emoji": emoji,
+                "category": category,
+                "channel": channel,
+                "entry_id": entry_id
             })
 
         if new_entries:
-            suffix = f" (フィルタで {filtered} 件除外)" if filtered else ""
-            print(f"  ✅ {len(new_entries)} 件{suffix}")
-        elif filtered:
-            print(f"  🚫 フィルタで {filtered} 件除外")
-
+            print(f"  ✅ {len(new_entries)} 件")
         return new_entries
     except Exception as e:
         print(f"  ⚠️ エラー: {e}")
         return []
 
 
+# ==================== カテゴリ別投稿 ====================
+
+def post_category_with_thread(category_key, entries, channel_id):
+    """カテゴリの親メッセージとスレッド投稿"""
+    if not entries:
+        return
+
+    cat_info = CATEGORIES[category_key]
+    count = len(entries)
+
+    parent_blocks = [
+        {
+            "type": "header",
+            "text": {
+                "type": "plain_text",
+                "text": f"{cat_info['emoji']} {cat_info['name']}",
+                "emoji": True
+            }
+        },
+        {
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": f"*{count} 件* の新着情報\n💬 スレッドで詳細をチェック"
+            }
+        }
+    ]
+
+    print(f"\n  📤 {cat_info['name']} ({count}件)")
+    thread_ts = post_to_slack(
+        channel_id,
+        text=f"{cat_info['name']} ({count}件)",
+        blocks=parent_blocks
+    )
+    if not thread_ts:
+        return
+
+    for item in entries:
+        entry = item["entry"]
+        title = entry.title if hasattr(entry, 'title') else "タイトルなし"
+        link = entry.link if hasattr(entry, 'link') else ""
+        exciting_title = make_title_exciting(title)
+        post_to_slack(
+            channel_id,
+            text=f"{item['emoji']} {exciting_title}\n{link}",
+            thread_ts=thread_ts
+        )
+
+
+# ==================== メイン ====================
+
 def main():
     print(f"\n{'='*60}")
-    print(f"🤖 RSS Feed Bot (7ch + リッチフォーマット)")
+    print(f"🤖 RSS Feed Bot 起動 (再設計版)")
     print(f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} UTC")
     print(f"{'='*60}\n")
 
@@ -655,56 +579,84 @@ def main():
     if is_first_run:
         print(f"🎉 初回実行: 過去 {INITIAL_HOURS} 時間分のみ通知\n")
 
-    channel_data = {k: defaultdict(list) for k in CHANNEL_CATEGORIES}
+    # チャンネルごとに分類
+    channel_data = {
+        "mobile": defaultdict(list),
+        "design": defaultdict(list),
+        "ai": defaultdict(list),
+        "tools": defaultdict(list),
+    }
 
-    for feed_def in FEEDS:
-        feed_name, feed_url, category, emoji, channel = feed_def[:5]
-        handler = feed_def[5] if len(feed_def) > 5 else None
-
-        is_codemagic = (handler == "codemagic")
-        is_zenn      = (feed_url in ZENN_FEED_URLS)
-
-        if not is_codemagic and channel not in channel_data:
-            continue
-
+    # ---- 1. RSS フィード収集 ----
+    print(f"\n{'─'*60}")
+    print(f"📡 RSS フィード収集 ({len(FEEDS)} 件)")
+    print(f"{'─'*60}")
+    for feed_name, feed_url, category, emoji, channel in FEEDS:
         new_items = check_feed(
             feed_name, feed_url, category, emoji, channel,
-            seen_entries, is_first_run,
-            is_zenn=is_zenn, is_codemagic=is_codemagic,
+            seen_entries, is_first_run
         )
-
         for item in new_items:
-            dest = item["channel"]
-            cat  = item["category"]
-            if dest in channel_data:
-                channel_data[dest][cat].append(item)
+            # キーワードフィルタ適用
+            if not should_post(item):
+                seen_entries[item["entry_id"]] = True  # 既読にして再判定回避
+                continue
+            channel_data[channel][category].append(item)
             seen_entries[item["entry_id"]] = True
 
+    # ---- 2. Zenn API 収集 ----
+    print(f"\n{'─'*60}")
+    print(f"📡 Zenn API 収集 ({len(ZENN_SOURCES)} トピック)")
+    print(f"{'─'*60}")
+    for display_name, topic, emoji, channel, category in ZENN_SOURCES:
+        items = check_zenn_source(
+            display_name, topic, emoji, channel, category, seen_entries
+        )
+        for item in items:
+            channel_data[channel][category].append(item)
+            seen_entries[item["entry_id"]] = True
+
+    # ---- 3. カテゴリ別上限の適用 ----
+    for ch_key, cat_dict in channel_data.items():
+        for cat, items in cat_dict.items():
+            limit = MAX_PER_CATEGORY.get(cat)
+            if limit and len(items) > limit:
+                # Zenn は LGTM 順、それ以外は新着順を維持
+                # ai_practice は Zenn の LGTM 数を優先するため、liked_count を持つものを上に
+                def sort_key(it):
+                    title = getattr(it["entry"], "title", "")
+                    m = re.search(r'👍(\d+)', title)
+                    return -int(m.group(1)) if m else 0
+                items.sort(key=sort_key)
+                cat_dict[cat] = items[:limit]
+                print(f"  ✂️  {cat}: {len(items)} → {limit} 件に制限")
+
+    # ---- 4. 各チャンネルへ投稿 ----
     channels = [
-        ("mobile",          CHANNEL_MOBILE,          "📱 モバイル開発 (Tips)"),
-        ("mobile_releases", CHANNEL_MOBILE_RELEASES, "🚀 モバイル 公式リリース"),
-        ("design",          CHANNEL_DESIGN,          "🎨 デザイン (思想・網羅)"),
-        ("design_product",  CHANNEL_DESIGN_PRODUCT,  "🛍️ デザイン (実務)"),
-        ("ai",              CHANNEL_AI,              "💻 AI Coding Tips"),
-        ("ai_releases",     CHANNEL_AI_RELEASES,     "⚡ AI 公式リリース"),
-        ("tools",           CHANNEL_TOOLS,           "⚙️ ツール・サービス"),
-        # ("research",      CHANNEL_RESEARCH,         "🔬 AI 研究・論文"),
+        ("mobile", CHANNEL_MOBILE, "📱 モバイル開発"),
+        ("design", CHANNEL_DESIGN, "🎨 デザイン"),
+        ("ai", CHANNEL_AI, "🧠 AI & ML"),
+        ("tools", CHANNEL_TOOLS, "⚙️ ツール・サービス"),
     ]
 
     total_new = 0
     for channel_key, channel_id, channel_name in channels:
         if not channel_id:
             continue
+
         print(f"\n{'='*60}")
         print(f"{channel_name}")
         print(f"{'='*60}")
-        for cat_key in CHANNEL_CATEGORIES.get(channel_key, []):
-            items = channel_data[channel_key][cat_key]
-            if items:
-                post_category_with_thread(cat_key, items, channel_id, CATEGORIES)
-                total_new += len(items)
+
+        categories = CHANNEL_CATEGORIES[channel_key]
+        for category in categories:
+            entries = channel_data[channel_key][category]
+            if entries:
+                post_category_with_thread(category, entries, channel_id)
+                total_new += len(entries)
 
     save_seen_entries(seen_entries)
+
     print(f"\n{'='*60}")
     print(f"✨ 完了: {total_new} 件の新着記事を投稿")
     print(f"{'='*60}\n")
