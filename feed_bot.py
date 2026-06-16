@@ -43,7 +43,9 @@ FEEDS = [
     ("Flutter Blog", "https://medium.com/feed/flutter", "flutter", "📝", "mobile"),
     ("Flutter Community", "https://medium.com/feed/flutter-community", "flutter", "💎", "mobile"),
     ("Code with Andrea", "https://codewithandrea.com/rss.xml", "flutter", "🎓", "mobile"),
-    ("FlutterDev Reddit", "https://www.reddit.com/r/FlutterDev/.rss", "flutter", "🔧", "mobile"),
+    ("Riverpod Releases", "https://github.com/rrousselGit/riverpod/releases.atom", "flutter", "🔗", "mobile"),
+    ("Freezed Releases", "https://github.com/rrousselGit/freezed/releases.atom", "flutter", "❄️", "mobile"),
+    ("Flutter Packages", "https://github.com/flutter/packages/releases.atom", "flutter", "📦", "mobile"),
 
     # Swift & iOS
     ("Swift.org Blog", "https://www.swift.org/atom.xml", "swift", "⚡️", "mobile"),
@@ -56,6 +58,7 @@ FEEDS = [
     ("Point-Free", "https://www.pointfree.co/blog/rss.xml", "swift", "🎯", "mobile"),
     ("Swift with Vincent", "https://www.swiftwithvincent.com/blog/rss.xml", "swift", "🛠️", "mobile"),
     ("iOS Dev Weekly", "https://iosdevweekly.com/issues.rss", "swift", "📰", "mobile"),
+    ("Swift Evolution", "https://forums.swift.org/c/evolution/18.rss", "swift", "📜", "mobile"),
 
     # Android & Kotlin
     ("Android Developers Blog", "https://android-developers.googleblog.com/feeds/posts/default", "android", "🤖", "mobile"),
@@ -66,6 +69,7 @@ FEEDS = [
     ("Compose Releases", "https://github.com/JetBrains/compose-multiplatform/releases.atom", "android", "🔷", "mobile"),
     ("Philipp Lackner", "https://pl-coding.com/feed/", "android", "📝", "mobile"),
     ("Chris Banes", "https://chris.banes.dev/rss.xml", "android", "🏗️", "mobile"),
+    ("Android Studio Blog", "https://blog.jetbrains.com/android/feed/", "android", "🛠️", "mobile"),
 
     # ============================================
     # 🎨 デザイン系 (#design-trends) — 既存維持
@@ -78,18 +82,9 @@ FEEDS = [
     ("Laws of UX", "https://lawsofux.com/rss.xml", "design_ux", "⚖️", "design"),
     ("UX Design Institute", "https://www.uxdesigninstitute.com/blog/feed/", "design_ux", "🎯", "design"),
     ("IxDF", "https://www.interaction-design.org/literature/rss", "design_ux", "📊", "design"),
-    ("Adobe Create", "https://blog.adobe.com/en/topics/creativity/feed", "design_graphic", "🖼️", "design"),
-    ("Creative Bloq", "https://www.creativebloq.com/feed", "design_graphic", "🎨", "design"),
-    ("Designmodo", "https://designmodo.com/feed/", "design_graphic", "🌈", "design"),
-    ("Abduzeedo", "https://abduzeedo.com/rss.xml", "design_graphic", "💫", "design"),
-    ("Typewolf", "https://www.typewolf.com/feed", "design_typo", "📝", "design"),
-    ("Fonts In Use", "https://fontsinuse.com/rss", "design_typo", "✍️", "design"),
-    ("I Love Typography", "https://ilovetypography.com/feed/", "design_typo", "🔤", "design"),
-    ("CSS-Tricks", "https://css-tricks.com/feed/", "design_web", "🌐", "design"),
-    ("Codrops", "https://tympanus.net/codrops/feed/", "design_web", "🎯", "design"),
-    ("Awwwards", "https://www.awwwards.com/blog/feed/", "design_web", "💎", "design"),
-    ("Web Designer Depot", "https://www.webdesignerdepot.com/feed/", "design_web", "🚀", "design"),
-    ("RWD Weekly", "https://responsivedesign.is/rss/", "design_web", "📱", "design"),
+    # Design Guidelines (Apple HIG / Material Design)
+    ("Apple HIG Updates", "https://developer.apple.com/news/releases/rss/releases.rss", "design_guidelines", "🍎", "design"),
+    ("Google Design Blog", "https://design.google/feed", "design_guidelines", "🎨", "design"),
 
     # ============================================
     # 🧠 AI & ML 系 (#ai-ml-news) — 再設計
@@ -100,9 +95,6 @@ FEEDS = [
     ("Anthropic News", "https://www.anthropic.com/news/rss", "ai_official", "🤖", "ai"),
     ("Google AI Blog", "https://blog.research.google/feeds/posts/default", "ai_official", "🔬", "ai"),
     ("Hugging Face", "https://huggingface.co/blog/feed.xml", "ai_official", "🤗", "ai"),
-    ("Meta AI", "https://ai.meta.com/blog/rss/", "ai_official", "🦾", "ai"),
-    ("DeepMind", "https://deepmind.google/blog/rss.xml", "ai_official", "🎯", "ai"),
-    ("Mistral AI", "https://mistral.ai/news/rss/", "ai_official", "⚡️", "ai"),
 
     # --- ai_practice: 活用術・実装ノウハウ(キーワードフィルタ適用) ---
     # 高品質個人/公式
@@ -115,15 +107,13 @@ FEEDS = [
     ("Medium - Cursor", "https://medium.com/feed/tag/cursor", "ai_practice", "🖱️", "ai"),
     ("Medium - Prompt Engineering", "https://medium.com/feed/tag/prompt-engineering", "ai_practice", "✏️", "ai"),
     ("Medium - LLM", "https://medium.com/feed/tag/large-language-models", "ai_practice", "📚", "ai"),
+    ("Medium - AI Agents", "https://medium.com/feed/tag/ai-agents", "ai_practice", "🕵️", "ai"),
+    ("Medium - Codex", "https://medium.com/feed/tag/openai-codex", "ai_practice", "📋", "ai"),
 
     # --- ai_devtools: LLM 開発系ツール(フィルタ無し) ---
     ("LangChain Blog", "https://blog.langchain.dev/rss/", "ai_devtools", "🛠️", "ai"),
     ("LlamaIndex", "https://www.llamaindex.ai/blog/rss.xml", "ai_devtools", "🔗", "ai"),
     ("Replicate Blog", "https://replicate.com/blog/rss.xml", "ai_devtools", "🔄", "ai"),
-
-    # --- ai_research: 論文・研究(フィルタ無し) ---
-    ("The Batch", "https://www.deeplearning.ai/the-batch/feed/", "ai_research", "🎙️", "ai"),
-    ("Papers with Code", "https://paperswithcode.com/feed.xml", "ai_research", "🔍", "ai"),
 
     # ============================================
     # ⚙️ ツール・サービス系 (#dev-tools-services) — 既存維持
@@ -146,6 +136,11 @@ FEEDS = [
     ("JetBrains Blog", "https://blog.jetbrains.com/feed/", "tools_dev", "🔧", "tools"),
     ("Raycast Blog", "https://www.raycast.com/blog/rss.xml", "tools_dev", "🌙", "tools"),
     ("npm Blog", "https://blog.npmjs.org/rss.xml", "tools_dev", "📦", "tools"),
+    # Product & Community
+    ("Hacker News Best", "https://hnrss.org/best?count=15", "tools_product", "🔶", "tools"),
+    ("The Pragmatic Engineer", "https://newsletter.pragmaticengineer.com/feed", "tools_product", "🧰", "tools"),
+    ("InfoQ", "https://feed.infoq.com/", "tools_product", "📰", "tools"),
+    ("CNCF Blog", "https://www.cncf.io/blog/feed/", "tools_product", "☸️", "tools"),
 ]
 
 # ============================================
@@ -153,6 +148,7 @@ FEEDS = [
 #   (display_name, topic, emoji, channel, category)
 # ============================================
 ZENN_SOURCES = [
+    # AI
     ("Zenn - Claude Code", "claudecode", "💻", "ai", "ai_practice"),
     ("Zenn - Claude", "claude", "🤖", "ai", "ai_practice"),
     ("Zenn - GitHub Copilot", "githubcopilot", "🐙", "ai", "ai_practice"),
@@ -161,13 +157,41 @@ ZENN_SOURCES = [
     ("Zenn - Prompt Engineering", "プロンプトエンジニアリング", "✏️", "ai", "ai_practice"),
     ("Zenn - Codex", "codex", "🤖", "ai", "ai_practice"),
     ("Zenn - 生成AI", "生成ai", "🌟", "ai", "ai_practice"),
+    # Mobile
+    ("Zenn - Flutter", "flutter", "📱", "mobile", "flutter"),
+    ("Zenn - Swift", "swift", "⚡️", "mobile", "swift"),
+    ("Zenn - SwiftUI", "swiftui", "🖼️", "mobile", "swift"),
+    ("Zenn - Android", "android", "🤖", "mobile", "android"),
+    ("Zenn - Kotlin", "kotlin", "💜", "mobile", "android"),
+    # Design
+    ("Zenn - Figma", "figma", "🔷", "design", "design_ux"),
 ]
 
 # Zenn の LGTM 閾値(これ以上の "いいね" がついた記事のみ取得)
-ZENN_LGTM_THRESHOLD = 30
+ZENN_LGTM_THRESHOLD = 15
 
 # Zenn 記事の最大鮮度(これより古い記事は無視。日数)
 ZENN_MAX_AGE_DAYS = 7
+
+# ============================================
+# Qiita API ソース定義
+#   (display_name, tag, emoji, channel, category)
+# ============================================
+QIITA_SOURCES = [
+    ("Qiita - Flutter", "flutter", "📱", "mobile", "flutter"),
+    ("Qiita - Dart", "dart", "🎯", "mobile", "flutter"),
+    ("Qiita - Swift", "swift", "⚡️", "mobile", "swift"),
+    ("Qiita - SwiftUI", "swiftui", "🖼️", "mobile", "swift"),
+    ("Qiita - Android", "android", "🤖", "mobile", "android"),
+    ("Qiita - Kotlin", "kotlin", "💜", "mobile", "android"),
+    ("Qiita - Claude", "claude", "🤖", "ai", "ai_practice"),
+    ("Qiita - ChatGPT", "chatgpt", "💬", "ai", "ai_practice"),
+    ("Qiita - LLM", "llm", "📚", "ai", "ai_practice"),
+]
+
+QIITA_API_TOKEN = os.environ.get("QIITA_API_TOKEN", "")
+QIITA_LGTM_THRESHOLD = 10
+QIITA_MAX_AGE_DAYS = 7
 
 
 # ============================================
@@ -205,6 +229,18 @@ FILTER_RULES = {
         # 短すぎるタイトルは弱い記事が多い
         "min_title_length": 15,
     },
+    # design_guidelines カテゴリのフィルタ
+    "design_guidelines": {
+        "mode": "include",
+        "keywords": [
+            "human interface", "hig", "design", "guidelines", "accessibility",
+            "material design", "material you", "material 3",
+            "components", "tokens", "theming", "design system",
+            "typography", "color", "layout", "navigation",
+        ],
+        "exclude": [],
+        "min_title_length": 10,
+    },
     # それ以外のカテゴリは passthrough(全件通す)
 }
 
@@ -217,7 +253,8 @@ MAX_PER_CATEGORY = {
     "ai_official": 15,    # 公式は重要なので多め
     "ai_practice": 10,    # 活用術は厳選
     "ai_devtools": 8,
-    "ai_research": 5,
+    # Tools
+    "tools_product": 8,
     # それ以外はデフォルト無制限(None)
 }
 
@@ -232,27 +269,25 @@ CATEGORIES = {
     "android": {"name": "Android & Kotlin", "emoji": "🤖"},
     # Design
     "design_ux": {"name": "UI/UX Design", "emoji": "🎨"},
-    "design_graphic": {"name": "Graphic Design", "emoji": "🖼️"},
-    "design_typo": {"name": "Typography", "emoji": "📝"},
-    "design_web": {"name": "Web Design", "emoji": "🌐"},
+    "design_guidelines": {"name": "Design Guidelines", "emoji": "📐"},
     # AI(再設計)
     "ai_official": {"name": "AI Official Releases", "emoji": "🚀"},
     "ai_practice": {"name": "AI Practice & Tips", "emoji": "💡"},
     "ai_devtools": {"name": "AI Dev Tools", "emoji": "🛠️"},
-    "ai_research": {"name": "AI Research", "emoji": "🔬"},
     # Tools
     "tools_vcs": {"name": "Version Control & CI/CD", "emoji": "⚙️"},
     "tools_pm": {"name": "Project Management", "emoji": "📊"},
     "tools_infra": {"name": "Hosting & Infrastructure", "emoji": "☁️"},
     "tools_dev": {"name": "Developer Tools", "emoji": "🔧"},
+    "tools_product": {"name": "Product & Community", "emoji": "🏹"},
 }
 
 # チャンネルごとのカテゴリ表示順
 CHANNEL_CATEGORIES = {
     "mobile": ["flutter", "swift", "android"],
-    "design": ["design_ux", "design_graphic", "design_typo", "design_web"],
-    "ai": ["ai_official", "ai_practice", "ai_devtools", "ai_research"],
-    "tools": ["tools_vcs", "tools_pm", "tools_infra", "tools_dev"],
+    "design": ["design_ux", "design_guidelines"],
+    "ai": ["ai_official", "ai_practice", "ai_devtools"],
+    "tools": ["tools_vcs", "tools_pm", "tools_infra", "tools_dev", "tools_product"],
 }
 
 SEEN_FILE = Path("seen_entries.json")
@@ -437,6 +472,87 @@ def check_zenn_source(display_name, topic, emoji, channel, category, seen_entrie
     return items
 
 
+# ==================== Qiita API ====================
+
+def fetch_qiita_articles(tag, lgtm_threshold, max_age_days, seen_entries):
+    """
+    Qiita API v2 からタグの新着記事を取得し、
+    LGTM 閾値・鮮度・既読でフィルタする
+    """
+    url = f"https://qiita.com/api/v2/tags/{tag}/items"
+    params = {"page": 1, "per_page": 20}
+    headers = {"Accept": "application/json"}
+    if QIITA_API_TOKEN:
+        headers["Authorization"] = f"Bearer {QIITA_API_TOKEN}"
+    try:
+        res = requests.get(url, params=params, timeout=15, headers=headers)
+        if not res.ok:
+            print(f"  ⚠️ Qiita API エラー: {res.status_code}")
+            return []
+        articles = res.json()
+    except Exception as e:
+        print(f"  ⚠️ Qiita 取得失敗: {e}")
+        return []
+
+    if not articles:
+        return []
+
+    cutoff = datetime.now(timezone.utc) - timedelta(days=max_age_days)
+    results = []
+
+    for art in articles:
+        # LGTM 閾値
+        if art.get("likes_count", 0) < lgtm_threshold:
+            continue
+        # 鮮度
+        try:
+            pub_at = datetime.fromisoformat(art["created_at"]).astimezone(timezone.utc)
+            if pub_at < cutoff:
+                continue
+        except (KeyError, ValueError):
+            continue
+
+        link = art.get("url", "")
+        if link in seen_entries:
+            continue
+
+        results.append({
+            "title": art.get("title", ""),
+            "link": link,
+            "likes_count": art.get("likes_count", 0),
+            "created_at": art.get("created_at", ""),
+        })
+
+    return results
+
+
+def check_qiita_source(display_name, tag, emoji, channel, category, seen_entries):
+    """1つの Qiita タグをチェック"""
+    print(f"📡 {display_name} (LGTM>={QIITA_LGTM_THRESHOLD})")
+    articles = fetch_qiita_articles(tag, QIITA_LGTM_THRESHOLD, QIITA_MAX_AGE_DAYS, seen_entries)
+    if not articles:
+        return []
+
+    print(f"  ✅ {len(articles)} 件 (人気記事)")
+
+    items = []
+    for art in articles:
+        class _Entry:
+            pass
+        e = _Entry()
+        e.title = f"{art['title']} 👍{art['likes_count']}"
+        e.link = art["link"]
+        items.append({
+            "feed_name": display_name,
+            "entry": e,
+            "emoji": emoji,
+            "category": category,
+            "channel": channel,
+            "entry_id": art["link"],
+        })
+    return items
+
+
 # ==================== Slack 投稿 ====================
 
 def post_to_slack(channel_id, text=None, blocks=None, thread_ts=None):
@@ -613,10 +729,30 @@ def main():
             display_name, topic, emoji, channel, category, seen_entries
         )
         for item in items:
+            # ai_practice の場合はキーワードフィルタ適用
+            if category == "ai_practice" and not should_post(item):
+                seen_entries[item["entry_id"]] = True
+                continue
             channel_data[channel][category].append(item)
             seen_entries[item["entry_id"]] = True
 
-    # ---- 3. カテゴリ別上限の適用 ----
+    # ---- 3. Qiita API 収集 ----
+    print(f"\n{'─'*60}")
+    print(f"📡 Qiita API 収集 ({len(QIITA_SOURCES)} タグ)")
+    print(f"{'─'*60}")
+    for display_name, tag, emoji, channel, category in QIITA_SOURCES:
+        items = check_qiita_source(
+            display_name, tag, emoji, channel, category, seen_entries
+        )
+        for item in items:
+            # ai_practice の場合はキーワードフィルタ適用
+            if category == "ai_practice" and not should_post(item):
+                seen_entries[item["entry_id"]] = True
+                continue
+            channel_data[channel][category].append(item)
+            seen_entries[item["entry_id"]] = True
+
+    # ---- 4. カテゴリ別上限の適用 ----
     for ch_key, cat_dict in channel_data.items():
         for cat, items in cat_dict.items():
             limit = MAX_PER_CATEGORY.get(cat)
@@ -631,7 +767,7 @@ def main():
                 cat_dict[cat] = items[:limit]
                 print(f"  ✂️  {cat}: {len(items)} → {limit} 件に制限")
 
-    # ---- 4. 各チャンネルへ投稿 ----
+    # ---- 5. 各チャンネルへ投稿 ----
     channels = [
         ("mobile", CHANNEL_MOBILE, "📱 モバイル開発"),
         ("design", CHANNEL_DESIGN, "🎨 デザイン"),

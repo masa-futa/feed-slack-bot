@@ -25,16 +25,14 @@ jobs:
       run: |
         pip install feedparser requests
     
-    - name: Run feed bot (80 feeds, 4 channels)
+    - name: Run feed bot (77 RSS + 14 Zenn + 9 Qiita, 4 channels)
       env:
         SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
         SLACK_CHANNEL_MOBILE: ${{ secrets.SLACK_CHANNEL_MOBILE }}
         SLACK_CHANNEL_DESIGN: ${{ secrets.SLACK_CHANNEL_DESIGN }}
-        SLACK_CHANNEL_DESIGN_PRODUCT: ${{ secrets.SLACK_CHANNEL_DESIGN_PRODUCT }}
         SLACK_CHANNEL_AI: ${{ secrets.SLACK_CHANNEL_AI }}
         SLACK_CHANNEL_TOOLS: ${{ secrets.SLACK_CHANNEL_TOOLS }}
-        SLACK_CHANNEL_MOBILE_RELEASES: ${{ secrets.SLACK_CHANNEL_MOBILE_RELEASES }}
-        SLACK_CHANNEL_AI_RELEASES: ${{ secrets.SLACK_CHANNEL_AI_RELEASES }}
+        QIITA_API_TOKEN: ${{ secrets.QIITA_API_TOKEN }}
       run: |
         python feed_bot.py
     
