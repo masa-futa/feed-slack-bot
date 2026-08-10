@@ -29,6 +29,12 @@ CHANNEL_DESIGN = os.environ.get("SLACK_CHANNEL_DESIGN", "")   # → デザイン
 CHANNEL_AI = os.environ.get("SLACK_CHANNEL_AI", "")
 CHANNEL_TOOLS = os.environ.get("SLACK_CHANNEL_TOOLS", "")     # → 経営・読書・振り返りに転用
 
+# 翻訳用(任意)。設定すればDeepLを優先使用。未設定でもMyMemory(無料・キー不要)で動作
+DEEPL_API_KEY = os.environ.get("DEEPL_API_KEY", "")
+
+# 手動実行(Run workflow)かどうか。GitHub Actionsが自動でセットする環境変数
+IS_MANUAL_RUN = os.environ.get("GITHUB_EVENT_NAME", "") == "workflow_dispatch"
+
 JST = timezone(timedelta(hours=9))
 
 # ============================================
@@ -322,6 +328,52 @@ def should_post(item):
 
     return True
 
+# ==================== 翻訳 ====================
+
+def is_japanese(text):
+    """日本語(ひらがな/カタカナ/漢字)を含むかどうか"""
+    return bool(re.search(r"[぀-ゟ゠-ヿ一-鿿]", text or ""))
+
+
+def translate_to_ja(text):
+    """
+    英語タイトルを日本語に簡易翻訳する。
+    DEEPL_API_KEY が設定されていればDeepL(高精度)、
+    未設定ならMyMemory(無料・キー不要)にフォールバック。
+    失敗時は None を返す(呼び出し側で原文のみ表示)。
+    """
+    if not text:
+        return None
+
+    if DEEPL_API_KEY:
+        try:
+            res = requests.post(
+                "https://api-free.deepl.com/v2/translate",
+                data={"auth_key": DEEPL_API_KEY, "text": text[:1000], "target_lang": "JA"},
+                timeout=8,
+            )
+            if res.ok:
+                translations = res.json().get("translations", [])
+                if translations:
+                    return translations[0]["text"]
+        except Exception as e:
+            print(f"  ⚠️ DeepL翻訳失敗: {e}")
+
+    try:
+        res = requests.get(
+            "https://api.mymemory.translated.net/get",
+            params={"q": text[:500], "langpair": "en|ja"},
+            timeout=8,
+        )
+        if res.ok:
+            translated = res.json().get("responseData", {}).get("translatedText", "")
+            if translated:
+                return translated
+    except Exception as e:
+        print(f"  ⚠️ MyMemory翻訳失敗: {e}")
+
+    return None
+
 # ==================== Zenn API ====================
 
 def fetch_zenn_articles(topic, lgtm_threshold, max_age_days, seen_entries):
@@ -586,7 +638,19 @@ def post_category_with_thread(category_key, entries, channel_id):
         title = entry.title if hasattr(entry, "title") else "タイトルなし"
         link = entry.link if hasattr(entry, "link") else ""
         exciting_title = make_title_exciting(title)
-        post_to_slack(channel_id, text=f"{item['emoji']} {exciting_title}\n{link}", thread_ts=thread_ts)
+
+        if is_japanese(title):
+            # 既に日本語の記事(Zenn/Qiita/noteなど)は翻訳不要
+            body = f"{item['emoji']} {exciting_title}\n{link}"
+        else:
+            ja_title = translate_to_ja(title)
+            if ja_title:
+                # 英語原文と日本語訳を同じ比重で併記
+                body = f"{item['emoji']} {exciting_title}\n🇯🇵 {ja_title}\n{link}"
+            else:
+                body = f"{item['emoji']} {exciting_title}\n{link}"
+
+        post_to_slack(channel_id, text=body, thread_ts=thread_ts)
 
 # ==================== メイン ====================
 
@@ -602,8 +666,15 @@ def main():
 
     today_jst = datetime.now(JST)
     weekday = today_jst.weekday()
-    categories_today = WEEKDAY_CATEGORIES.get(weekday, [])
-    print(f"📅 本日({WEEKDAY_NAMES_JA[weekday]}曜日)の担当カテゴリ: {categories_today or 'なし(振り返り日)'}\n")
+
+    if IS_MANUAL_RUN:
+        # 手動実行(Run workflow)は曜日を無視して全カテゴリを取得
+        categories_today = list(CATEGORIES.keys())
+        print("🖐️ 手動実行を検知: 全カテゴリを取得します")
+        print(f"📅 対象カテゴリ: {categories_today}\n")
+    else:
+        categories_today = WEEKDAY_CATEGORIES.get(weekday, [])
+        print(f"📅 本日({WEEKDAY_NAMES_JA[weekday]}曜日)の担当カテゴリ: {categories_today or 'なし(振り返り日)'}\n")
 
     seen_entries = load_seen_entries()
     is_first_run = len(seen_entries) == 0
